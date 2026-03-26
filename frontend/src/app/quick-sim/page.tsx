@@ -1,32 +1,45 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { useSimContext } from "../components/SimContext";
-import { API_URL } from "../lib/api";
+import { useState } from 'react';
+import { useSimContext } from '../components/SimContext';
+import { API_URL } from '../lib/api';
 
 export default function QuickSimPage() {
-  const { simcInput, fightStyle, threads, selectedTalent, targetCount, fightLength, customApl, simcHeader, simcBasePlayer, simcRaidActors, simcPostCombos, simcFooter } = useSimContext();
+  const {
+    simcInput,
+    fightStyle,
+    threads,
+    selectedTalent,
+    targetCount,
+    fightLength,
+    customApl,
+    simcHeader,
+    simcBasePlayer,
+    simcRaidActors,
+    simcPostCombos,
+    simcFooter,
+  } = useSimContext();
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    setError('');
     if (simcInput.trim().length < 10) {
-      setError("SimC input is too short. Paste your full addon export.");
+      setError('SimC input is too short. Paste your full addon export.');
       return;
     }
     setSubmitting(true);
     try {
       const res = await fetch(`${API_URL}/api/sim`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           simc_input: simcInput,
           iterations: 10000,
           fight_style: fightStyle,
           target_error: 0.1,
-          sim_type: "quick",
+          sim_type: 'quick',
           desired_targets: targetCount,
           max_time: fightLength,
           threads,
@@ -46,7 +59,7 @@ export default function QuickSimPage() {
       const data = await res.json();
       window.location.href = `/sim/${data.id}`;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to submit sim");
+      setError(err instanceof Error ? err.message : 'Failed to submit sim');
     } finally {
       setSubmitting(false);
     }
@@ -65,7 +78,7 @@ export default function QuickSimPage() {
         disabled={submitting || simcInput.trim().length < 10}
         className="btn-primary w-full py-3 text-sm"
       >
-        {submitting ? "Running…" : "Run Simulation"}
+        {submitting ? 'Running…' : 'Run Simulation'}
       </button>
     </form>
   );
