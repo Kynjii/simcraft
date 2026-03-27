@@ -19,7 +19,9 @@ static BONUSES: OnceCell<HashMap<u64, Value>> = OnceCell::new();
 static UPGRADE_MAX: OnceCell<HashMap<u64, u64>> = OnceCell::new();
 static INSTANCES: OnceCell<Vec<Value>> = OnceCell::new();
 static DROPS_BY_ENCOUNTER: OnceCell<HashMap<i64, Vec<Value>>> = OnceCell::new();
-static UPGRADE_TRACKS: OnceCell<HashMap<(String, u64, u64), (u64, u64, u64)>> = OnceCell::new();
+type UpgradeTrackKey = (String, u64, u64);
+type UpgradeTrackValue = (u64, u64, u64);
+static UPGRADE_TRACKS: OnceCell<HashMap<UpgradeTrackKey, UpgradeTrackValue>> = OnceCell::new();
 static SEASON_CONFIG: OnceCell<Value> = OnceCell::new();
 
 // ---- Load ----
@@ -253,7 +255,7 @@ pub fn drops_by_encounter() -> &'static HashMap<i64, Vec<Value>> {
     DROPS_BY_ENCOUNTER.get().expect("Game data not loaded")
 }
 
-pub fn upgrade_tracks() -> Option<&'static HashMap<(String, u64, u64), (u64, u64, u64)>> {
+pub fn upgrade_tracks() -> Option<&'static HashMap<UpgradeTrackKey, UpgradeTrackValue>> {
     UPGRADE_TRACKS.get()
 }
 
@@ -627,7 +629,7 @@ pub fn difficulty_track_name(difficulty: &str) -> Option<String> {
 pub fn encounter_upgrade_level(encounter_id: i64) -> Option<u64> {
     season_cfg()
         .get("encounterUpgradeLevel")
-        .and_then(|m| m.get(&encounter_id.to_string()))
+        .and_then(|m| m.get(encounter_id.to_string()))
         .and_then(|v| v.as_u64())
 }
 

@@ -7,6 +7,8 @@ use crate::types::class_data::{self, ARMOR_SLOTS, GEAR_SLOTS, UNIQUE_SLOT_PAIRS}
 
 use once_cell::sync::Lazy;
 
+type ProfilesetResult = Result<(String, usize, HashMap<String, Vec<Value>>), String>;
+
 /// Maximum gear combinations for Top Gear. Override with MAX_COMBINATIONS env var.
 pub static MAX_COMBINATIONS: Lazy<usize> = Lazy::new(|| {
     if let Ok(val) = std::env::var("MAX_COMBINATIONS") {
@@ -49,7 +51,7 @@ pub fn generate_top_gear_input(
     items_by_slot: &HashMap<String, Vec<Value>>,
     selected_items: &HashMap<String, Vec<String>>,
     max_combos_override: Option<usize>,
-) -> Result<(String, usize, HashMap<String, Vec<Value>>), String> {
+) -> ProfilesetResult {
     // Extract base profile info (non-gear lines) and equipped gear
     let (base_lines, equipped_gear, talents_string, _spec) = parse_base_profile(base_profile);
 

@@ -167,6 +167,7 @@ const STAGED_THRESHOLD: usize = 10;
 /// `on_profileset_progress(current, total)` is called whenever simc reports
 /// completing a profileset (e.g. "3/7").
 /// `on_log(line)` is called for every line of output from either stdout or stderr.
+#[allow(clippy::too_many_arguments)]
 async fn run_simc_subprocess(
     simc_path: &Path,
     job_id: &str,
@@ -190,7 +191,7 @@ async fn run_simc_subprocess(
         format!("_{}", stage_name)
     };
 
-    let tmp_dir = TempDir::with_prefix(&format!("simc_{}{}_", job_id, suffix))
+    let tmp_dir = TempDir::with_prefix(format!("simc_{}{}_", job_id, suffix))
         .map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
     let input_file = tmp_dir.path().join("input.simc");
@@ -554,6 +555,7 @@ pub async fn run_simc(
 }
 
 /// Run a multi-stage simulation for Top Gear.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_simc_staged(
     simc_path: &Path,
     job_id: &str,

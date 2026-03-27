@@ -8,6 +8,12 @@ pub struct MemoryStorage {
     jobs: Mutex<HashMap<String, Job>>,
 }
 
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryStorage {
     pub fn new() -> Self {
         Self {

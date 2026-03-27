@@ -48,9 +48,7 @@ pub struct CharacterInfo {
 
 impl CharacterInfo {
     pub fn can_dual_wield(&self) -> bool {
-        self.spec
-            .as_deref()
-            .map_or(false, class_data::can_dual_wield)
+        self.spec.as_deref().is_some_and(class_data::can_dual_wield)
     }
 
     pub fn max_armor(&self) -> Option<u64> {

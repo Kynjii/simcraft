@@ -1474,7 +1474,7 @@ pub async fn start_with_storage_bind(
         app
     })
     .bind(&bind_addr)
-    .expect(&format!("Failed to bind to {}", bind_addr))
+    .unwrap_or_else(|_| panic!("Failed to bind to {}", bind_addr))
     .run();
 
     tokio::spawn(server);
