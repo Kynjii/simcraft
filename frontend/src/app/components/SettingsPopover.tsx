@@ -22,6 +22,8 @@ export default function SettingsPopover() {
     setIsDesktop(desktop);
     if (!desktop) return;
 
+    setMaxCombinations(readStoredMaxCombinations());
+
     fetch(`${API_URL}/health`)
       .then((res) => res.json())
       .then((data) => {
@@ -34,6 +36,16 @@ export default function SettingsPopover() {
         }
       })
       .catch(() => {});
+    function readStoredMaxCombinations(): number {
+      try {
+        const value = localStorage.getItem('simhammer_max_combinations');
+        if (value == null) return 500;
+        const parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
+      } catch {
+        return 500;
+      }
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- threads is intentionally captured once
 
   useEffect(() => {
@@ -114,7 +126,7 @@ export default function SettingsPopover() {
                 min={10}
                 max={100000}
                 step={50}
-                value={maxCombinations}
+                value={maxCombinations ?? 500}
                 onChange={(e) => {
                   const n = parseInt(e.target.value, 10);
                   if (Number.isFinite(n) && n > 0) setMaxCombinations(n);

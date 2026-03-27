@@ -76,6 +76,7 @@ export default function TopGearItemSelector({
   comboError,
 }: TopGearItemSelectorProps) {
   const { maxCombinations } = useSimContext();
+  const effectiveMaxCombinations = maxCombinations ?? 500;
   const [upgradeMenuFor, setUpgradeMenuFor] = useState<string | null>(null);
   const [upgradeOptions, setUpgradeOptions] = useState<UpgradeOption[]>([]);
   const [loadingUpgrades, setLoadingUpgrades] = useState(false);
@@ -255,7 +256,7 @@ export default function TopGearItemSelector({
 
   const comboLabel = `${comboCount.toLocaleString()} combo${comboCount !== 1 ? 's' : ''}`;
   const comboColorClass =
-    comboCount > maxCombinations
+    comboCount > effectiveMaxCombinations
       ? 'bg-red-500/10 text-red-400'
       : comboCount > 0
         ? 'bg-surface-2 text-white'

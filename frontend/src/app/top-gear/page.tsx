@@ -158,7 +158,7 @@ export default function TopGearPage() {
             items_by_slot: null,
             max_upgrade: maxUpgrade,
             copy_enchants: copyEnchants,
-            max_combinations: maxCombinations,
+            ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
           }),
           signal: controller.signal,
         });
@@ -205,7 +205,7 @@ export default function TopGearPage() {
         target_error: 0.1,
         max_upgrade: maxUpgrade,
         copy_enchants: copyEnchants,
-        max_combinations: maxCombinations,
+        ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
         threads,
         ...(batchId ? { batch_id: batchId } : {}),
         ...(selectedTalent ? { talents: selectedTalent } : {}),
