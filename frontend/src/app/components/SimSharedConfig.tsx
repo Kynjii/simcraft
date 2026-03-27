@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useSimContext } from './SimContext';
 import FightStyleSelector from './FightStyleSelector';
@@ -83,21 +83,27 @@ function AdvancedOptions() {
     setSimcFooter,
   } = useSimContext();
 
-  const expertValues: Record<ExpertTabKey, string> = {
-    header: simcHeader,
-    base_player: simcBasePlayer,
-    raid_actors: simcRaidActors,
-    post_combos: simcPostCombos,
-    footer: simcFooter,
-  };
+  const expertValues: Record<ExpertTabKey, string> = useMemo(
+    () => ({
+      header: simcHeader,
+      base_player: simcBasePlayer,
+      raid_actors: simcRaidActors,
+      post_combos: simcPostCombos,
+      footer: simcFooter,
+    }),
+    [simcHeader, simcBasePlayer, simcRaidActors, simcPostCombos, simcFooter]
+  );
 
-  const expertSetters: Record<ExpertTabKey, (v: string) => void> = {
-    header: setSimcHeader,
-    base_player: setSimcBasePlayer,
-    raid_actors: setSimcRaidActors,
-    post_combos: setSimcPostCombos,
-    footer: setSimcFooter,
-  };
+  const expertSetters: Record<ExpertTabKey, (v: string) => void> = useMemo(
+    () => ({
+      header: setSimcHeader,
+      base_player: setSimcBasePlayer,
+      raid_actors: setSimcRaidActors,
+      post_combos: setSimcPostCombos,
+      footer: setSimcFooter,
+    }),
+    [setSimcHeader, setSimcBasePlayer, setSimcRaidActors, setSimcPostCombos, setSimcFooter]
+  );
 
   const hasExpertContent = Object.values(expertValues).some((v) => v.trim());
   const isDefault =

@@ -309,7 +309,7 @@ export default function TopGearResults({
           <div className="space-y-1">
             {results.map((result, idx) => (
               <ResultRow
-                key={idx}
+                key={result.name}
                 result={result}
                 rank={idx + 1}
                 maxDps={maxDps}

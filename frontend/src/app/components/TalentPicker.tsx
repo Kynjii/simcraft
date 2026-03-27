@@ -33,7 +33,7 @@ export default function TalentPicker() {
         className="input-field !w-auto !px-2.5 !py-1.5 !text-xs"
       >
         {loadouts.map((l, i) => (
-          <option key={i} value={l.talentString}>
+          <option key={`${l.name}-${i}`} value={l.talentString}>
             {l.name}
             {l.isActive ? ' (equipped)' : ''}
           </option>

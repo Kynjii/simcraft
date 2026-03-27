@@ -158,7 +158,7 @@ export default function TopGearItemSelector({
 
       setUpgradeMenuFor(null);
     },
-    [resolved, selectedUids, upgradeOptions, onResolvedChange, onSelectionChange, onItemAdded]
+    [resolved, upgradeOptions, onResolvedChange, onItemAdded]
   );
 
   function toggleItem(item: ResolvedItem, group: DisplayGroup) {
@@ -441,7 +441,7 @@ function ItemDetails({
         <a
           href={item.item_id > 0 ? getWowheadUrl(item.item_id) : undefined}
           data-wowhead={item.item_id > 0 ? getWowheadData(item) : undefined}
-          className="pointer-events-none block truncate text-[13px] leading-tight no-underline"
+          className="pointer-events-auto block truncate text-[13px] leading-tight no-underline"
           style={{ color: item.quality_color }}
         >
           {item.name}

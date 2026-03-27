@@ -107,11 +107,7 @@ export default function SettingsPopover() {
                   }`}
                 >
                   <span className="block text-[12px] font-medium">{preset.label}</span>
-                  <span
-                    className={`mt-0.5 block text-[10px] ${active ? 'text-gray-600' : 'text-gray-600'}`}
-                  >
-                    {t} threads
-                  </span>
+                  <span className="mt-0.5 block text-[10px] text-gray-600">{t} threads</span>
                 </button>
               );
             })}

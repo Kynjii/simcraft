@@ -1,47 +1,30 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import ErrorAlert from '../components/ErrorAlert';
+import FloatingSubmitButton from '../components/FloatingSubmitButton';
 import { useSimContext } from '../components/SimContext';
 import TopGearItemSelector from '../components/TopGearItemSelector';
 import { API_URL } from '../lib/api';
-import { storeScenarioSiblings, clearScenarioSiblings } from '../lib/scenario-siblings';
-import type { ResolveGearResponse, GEAR_SLOTS } from '../lib/types';
+import { useSimSubmit } from '../lib/useSimSubmit';
+import type { ResolveGearResponse } from '../lib/types';
 
 export default function TopGearPage() {
-  const {
-    simcInput,
-    fightStyle,
-    threads,
-    maxCombinations,
-    selectedTalent,
-    targetCount,
-    fightLength,
-    customApl,
-    simcHeader,
-    simcBasePlayer,
-    simcRaidActors,
-    simcPostCombos,
-    simcFooter,
-    scenarios,
-    clearScenarios,
-  } = useSimContext();
+  const { simcInput, maxCombinations, scenarios } = useSimContext();
   const [resolved, setResolved] = useState<ResolveGearResponse | null>(null);
   const [selectedUids, setSelectedUids] = useState<Record<string, Set<string>>>({});
-  // Items added locally via the upgrade copy feature (not in the original simc input)
   const [localItems, setLocalItems] = useState<
     { slot: string; simc_string: string; origin: string }[]
   >([]);
   const [maxUpgrade, setMaxUpgrade] = useState(false);
   const [copyEnchants, setCopyEnchants] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
   const [resolving, setResolving] = useState(false);
   const [comboCount, setComboCount] = useState(0);
   const [comboError, setComboError] = useState('');
   const prevInputRef = useRef('');
   const prevUpgradeRef = useRef(false);
 
-  // Call /api/gear/resolve when simc input or maxUpgrade changes
+  // Resolve gear when simc input or maxUpgrade changes
   useEffect(() => {
     const trimmed = simcInput.trim();
     const inputChanged = trimmed !== prevInputRef.current;
@@ -87,7 +70,6 @@ export default function TopGearPage() {
 
           setResolved(data);
 
-          // Only clear selection and local items when the input changes, not when upgrade toggles
           if (inputChanged) {
             setSelectedUids({});
             setLocalItems([]);
@@ -100,7 +82,7 @@ export default function TopGearPage() {
         }
       },
       inputChanged ? 300 : 0
-    ); // No debounce for upgrade toggle
+    );
     return () => clearTimeout(timer);
   }, [simcInput, maxUpgrade]);
 
@@ -137,7 +119,7 @@ export default function TopGearPage() {
     return result;
   }
 
-  // Fetch combo count from backend whenever selection changes
+  // Fetch combo count whenever selection changes
   useEffect(() => {
     const hasSelection = Object.values(selectedUids).some((s) => s.size > 0);
     if (!resolved || !hasSelection) {
@@ -183,96 +165,29 @@ export default function TopGearPage() {
     };
   }, [selectedUids, resolved, localItems, maxUpgrade, copyEnchants, maxCombinations]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function handleSubmit() {
-    if (!resolved) return;
-    setError('');
-    setSubmitting(true);
-    clearScenarioSiblings();
-    try {
-      const selectedUidsJson = buildSelectedUidsJson();
-      const submitInput = buildSubmitInput();
+  const buildPayload = useCallback(
+    () => ({
+      simc_input: buildSubmitInput(),
+      selected_items: buildSelectedUidsJson(),
+      items_by_slot: null,
+      max_upgrade: maxUpgrade,
+      copy_enchants: copyEnchants,
+      ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [simcInput, localItems, selectedUids, maxUpgrade, copyEnchants, maxCombinations]
+  );
 
-      const configs =
-        scenarios.length > 0 ? scenarios : [{ id: '', fightStyle, targetCount, fightLength }];
+  const validate = useCallback(() => {
+    if (!resolved) return 'No gear resolved';
+    return null;
+  }, [resolved]);
 
-      const batchId = scenarios.length > 0 ? crypto.randomUUID() : undefined;
-
-      const sharedPayload = {
-        simc_input: submitInput,
-        selected_items: selectedUidsJson,
-        items_by_slot: null,
-        iterations: 10000,
-        target_error: 0.1,
-        max_upgrade: maxUpgrade,
-        copy_enchants: copyEnchants,
-        ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
-        threads,
-        ...(batchId ? { batch_id: batchId } : {}),
-        ...(selectedTalent ? { talents: selectedTalent } : {}),
-        ...(customApl ? { custom_apl: customApl } : {}),
-        ...(simcHeader ? { simc_header: simcHeader } : {}),
-        ...(simcBasePlayer ? { simc_base_player: simcBasePlayer } : {}),
-        ...(simcRaidActors ? { simc_raid_actors: simcRaidActors } : {}),
-        ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
-        ...(simcFooter ? { simc_footer: simcFooter } : {}),
-      };
-
-      const results = await Promise.allSettled(
-        configs.map(async (config) => {
-          const res = await fetch(`${API_URL}/api/top-gear/sim`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ...sharedPayload,
-              fight_style: config.fightStyle,
-              desired_targets: config.targetCount,
-              max_time: config.fightLength,
-            }),
-          });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.detail || `Server error ${res.status}`);
-          }
-          return res.json();
-        })
-      );
-
-      if (scenarios.length === 0) {
-        const r = results[0];
-        if (r.status === 'fulfilled') {
-          window.location.href = `/sim/${r.value.id}`;
-        } else {
-          throw r.reason;
-        }
-      } else {
-        const siblings = configs
-          .map((config, i) => {
-            const r = results[i];
-            return r.status === 'fulfilled'
-              ? {
-                  id: r.value.id,
-                  fightStyle: config.fightStyle,
-                  targetCount: config.targetCount,
-                  fightLength: config.fightLength,
-                }
-              : null;
-          })
-          .filter((s): s is NonNullable<typeof s> => s !== null);
-
-        if (siblings.length > 0) {
-          storeScenarioSiblings(siblings);
-          clearScenarios();
-          window.location.href = `/sim/${siblings[0].id}`;
-        } else {
-          throw new Error('All scenario submissions failed');
-        }
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to submit sim');
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const { submit, submitting, error, buttonLabel } = useSimSubmit({
+    endpoint: '/api/top-gear/sim',
+    buildPayload,
+    validate,
+  });
 
   if (!resolved) {
     return (
@@ -342,14 +257,10 @@ export default function TopGearPage() {
         comboError={comboError}
       />
 
-      {error && (
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-400">
-          {error}
-        </div>
-      )}
+      <ErrorAlert message={error} />
 
       <button
-        onClick={handleSubmit}
+        onClick={submit}
         disabled={submitting}
         className="btn-primary flex w-full items-center justify-center gap-2 py-3 text-sm"
       >
@@ -366,42 +277,16 @@ export default function TopGearPage() {
             </svg>
             Starting sim…
           </>
-        ) : scenarios.length > 0 ? (
-          `Run ${scenarios.length} Scenario${scenarios.length > 1 ? 's' : ''}`
         ) : (
-          'Find Top Gear'
+          buttonLabel('Find Top Gear')
         )}
       </button>
 
-      {/* Sticky side button */}
-      <button
-        onClick={handleSubmit}
-        disabled={submitting}
-        className="btn-primary group fixed right-4 top-1/2 z-[90] flex w-10 -translate-y-1/2 items-center gap-0 overflow-hidden rounded-full px-2.5 py-2.5 text-sm shadow-lg shadow-black/50 transition-all duration-200 hover:w-auto hover:gap-2 hover:rounded-xl hover:px-4"
-      >
-        {submitting ? (
-          <svg className="h-4 w-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" opacity="0.25" />
-            <path
-              d="M14 8a6 6 0 00-6-6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-        ) : (
-          <svg className="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M3 2l10 6-10 6V2z" />
-          </svg>
-        )}
-        <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:max-w-[10rem] group-hover:opacity-100">
-          {submitting
-            ? 'Starting sim…'
-            : scenarios.length > 0
-              ? `Run ${scenarios.length} Scenario${scenarios.length > 1 ? 's' : ''}`
-              : 'Find Top Gear'}
-        </span>
-      </button>
+      <FloatingSubmitButton
+        onClick={submit}
+        submitting={submitting}
+        label={buttonLabel('Find Top Gear')}
+      />
     </div>
   );
 }

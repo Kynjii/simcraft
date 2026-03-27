@@ -22,6 +22,7 @@ const iconCache = new Map<number, string>();
 
 function useSpellIcons(spellIds: number[]) {
   const [icons, setIcons] = useState<Map<number, string>>(new Map());
+  const depKey = spellIds.join(',');
 
   useEffect(() => {
     const missing = spellIds.filter((id) => id > 0 && !iconCache.has(id));
@@ -51,7 +52,7 @@ function useSpellIcons(spellIds: number[]) {
     return () => {
       cancelled = true;
     };
-  }, [spellIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [depKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return icons;
 }

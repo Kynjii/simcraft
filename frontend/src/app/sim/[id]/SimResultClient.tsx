@@ -102,14 +102,15 @@ export default function SimResultClient() {
     if (!id || id === '_') return;
     setFetchError('');
     let active = true;
+    let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
         const res = await fetch(`${API_URL}/api/sim/${id}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: JobData = await res.json();
         if (active) setJob(data);
-        if (data.status === 'pending' || data.status === 'running') {
-          setTimeout(poll, 2000);
+        if (active && (data.status === 'pending' || data.status === 'running')) {
+          timer = setTimeout(poll, 2000);
         }
       } catch (err) {
         if (active) setFetchError(err instanceof Error ? err.message : 'Failed to fetch status');
@@ -118,6 +119,7 @@ export default function SimResultClient() {
     poll();
     return () => {
       active = false;
+      clearTimeout(timer);
     };
   }, [id]);
 
@@ -126,6 +128,7 @@ export default function SimResultClient() {
     if (!showLogs || !id || id === '_') return;
     if (job?.status !== 'pending' && job?.status !== 'running') return;
     let active = true;
+    let timer: ReturnType<typeof setTimeout>;
     async function pollLogs() {
       try {
         const res = await fetch(`${API_URL}/api/sim/${id}/logs?after=${logCursorRef.current}`);
@@ -141,11 +144,12 @@ export default function SimResultClient() {
       } catch {
         /* ignore */
       }
-      if (active) setTimeout(pollLogs, 1000);
+      if (active) timer = setTimeout(pollLogs, 1000);
     }
     pollLogs();
     return () => {
       active = false;
+      clearTimeout(timer);
     };
   }, [showLogs, id, job?.status]);
 
