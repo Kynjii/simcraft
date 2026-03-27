@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useSimContext } from './SimContext';
 import FightStyleSelector from './FightStyleSelector';
+import ScenarioBuilder from './ScenarioBuilder';
 import TalentPicker from './TalentPicker';
 
 function parseCharacterInfo(input: string) {
@@ -173,6 +174,8 @@ function AdvancedOptions() {
               </div>
             </div>
           </div>
+
+          <ScenarioBuilder />
 
           {/* Custom APL */}
           <div className="space-y-2">

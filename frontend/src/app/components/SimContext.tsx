@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import type { FightScenario } from '../lib/types';
 
 interface SimContextType {
   simcInput: string;
@@ -30,6 +31,11 @@ interface SimContextType {
   setSimcPostCombos: (v: string) => void;
   simcFooter: string;
   setSimcFooter: (v: string) => void;
+  // Multi-sim scenarios
+  scenarios: FightScenario[];
+  addScenario: () => void;
+  removeScenario: (id: string) => void;
+  clearScenarios: () => void;
 }
 
 const SimContext = createContext<SimContextType | null>(null);
@@ -69,6 +75,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [simcRaidActors, setSimcRaidActors] = useState('');
   const [simcPostCombos, setSimcPostCombos] = useState('');
   const [simcFooter, setSimcFooter] = useState('');
+  const [scenarios, setScenarios] = useState<FightScenario[]>([]);
+
+  const addScenario = useCallback(() => {
+    setScenarios((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), fightStyle, targetCount, fightLength },
+    ]);
+  }, [fightStyle, targetCount, fightLength]);
+
+  const removeScenario = useCallback((id: string) => {
+    setScenarios((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const clearScenarios = useCallback(() => {
+    setScenarios([]);
+  }, []);
 
   const setSimcInput = useCallback((v: string) => {
     _setSimcInput(v);
@@ -120,6 +142,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         setSimcPostCombos,
         simcFooter,
         setSimcFooter,
+        scenarios,
+        addScenario,
+        removeScenario,
+        clearScenarios,
       }}
     >
       {children}

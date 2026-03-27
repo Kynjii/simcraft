@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSimContext } from '../components/SimContext';
 import TopGearItemSelector from '../components/TopGearItemSelector';
 import { API_URL } from '../lib/api';
+import { storeScenarioSiblings, clearScenarioSiblings } from '../lib/scenario-siblings';
 import type { ResolveGearResponse, GEAR_SLOTS } from '../lib/types';
 
 export default function TopGearPage() {
@@ -21,6 +22,8 @@ export default function TopGearPage() {
     simcRaidActors,
     simcPostCombos,
     simcFooter,
+    scenarios,
+    clearScenarios,
   } = useSimContext();
   const [resolved, setResolved] = useState<ResolveGearResponse | null>(null);
   const [selectedUids, setSelectedUids] = useState<Record<string, Set<string>>>({});
@@ -184,41 +187,86 @@ export default function TopGearPage() {
     if (!resolved) return;
     setError('');
     setSubmitting(true);
+    clearScenarioSiblings();
     try {
       const selectedUidsJson = buildSelectedUidsJson();
       const submitInput = buildSubmitInput();
 
-      const res = await fetch(`${API_URL}/api/top-gear/sim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          simc_input: submitInput,
-          selected_items: selectedUidsJson,
-          items_by_slot: null,
-          iterations: 10000,
-          fight_style: fightStyle,
-          target_error: 0.1,
-          desired_targets: targetCount,
-          max_time: fightLength,
-          max_upgrade: maxUpgrade,
-          copy_enchants: copyEnchants,
-          max_combinations: maxCombinations,
-          threads,
-          ...(selectedTalent ? { talents: selectedTalent } : {}),
-          ...(customApl ? { custom_apl: customApl } : {}),
-          ...(simcHeader ? { simc_header: simcHeader } : {}),
-          ...(simcBasePlayer ? { simc_base_player: simcBasePlayer } : {}),
-          ...(simcRaidActors ? { simc_raid_actors: simcRaidActors } : {}),
-          ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
-          ...(simcFooter ? { simc_footer: simcFooter } : {}),
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `Server error ${res.status}`);
+      const configs =
+        scenarios.length > 0 ? scenarios : [{ id: '', fightStyle, targetCount, fightLength }];
+
+      const batchId = scenarios.length > 0 ? crypto.randomUUID() : undefined;
+
+      const sharedPayload = {
+        simc_input: submitInput,
+        selected_items: selectedUidsJson,
+        items_by_slot: null,
+        iterations: 10000,
+        target_error: 0.1,
+        max_upgrade: maxUpgrade,
+        copy_enchants: copyEnchants,
+        max_combinations: maxCombinations,
+        threads,
+        ...(batchId ? { batch_id: batchId } : {}),
+        ...(selectedTalent ? { talents: selectedTalent } : {}),
+        ...(customApl ? { custom_apl: customApl } : {}),
+        ...(simcHeader ? { simc_header: simcHeader } : {}),
+        ...(simcBasePlayer ? { simc_base_player: simcBasePlayer } : {}),
+        ...(simcRaidActors ? { simc_raid_actors: simcRaidActors } : {}),
+        ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
+        ...(simcFooter ? { simc_footer: simcFooter } : {}),
+      };
+
+      const results = await Promise.allSettled(
+        configs.map(async (config) => {
+          const res = await fetch(`${API_URL}/api/top-gear/sim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...sharedPayload,
+              fight_style: config.fightStyle,
+              desired_targets: config.targetCount,
+              max_time: config.fightLength,
+            }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || `Server error ${res.status}`);
+          }
+          return res.json();
+        })
+      );
+
+      if (scenarios.length === 0) {
+        const r = results[0];
+        if (r.status === 'fulfilled') {
+          window.location.href = `/sim/${r.value.id}`;
+        } else {
+          throw r.reason;
+        }
+      } else {
+        const siblings = configs
+          .map((config, i) => {
+            const r = results[i];
+            return r.status === 'fulfilled'
+              ? {
+                  id: r.value.id,
+                  fightStyle: config.fightStyle,
+                  targetCount: config.targetCount,
+                  fightLength: config.fightLength,
+                }
+              : null;
+          })
+          .filter((s): s is NonNullable<typeof s> => s !== null);
+
+        if (siblings.length > 0) {
+          storeScenarioSiblings(siblings);
+          clearScenarios();
+          window.location.href = `/sim/${siblings[0].id}`;
+        } else {
+          throw new Error('All scenario submissions failed');
+        }
       }
-      const data = await res.json();
-      window.location.href = `/sim/${data.id}`;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to submit sim');
     } finally {
@@ -318,6 +366,8 @@ export default function TopGearPage() {
             </svg>
             Starting sim…
           </>
+        ) : scenarios.length > 0 ? (
+          `Run ${scenarios.length} Scenario${scenarios.length > 1 ? 's' : ''}`
         ) : (
           'Find Top Gear'
         )}
@@ -345,7 +395,11 @@ export default function TopGearPage() {
           </svg>
         )}
         <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:max-w-[10rem] group-hover:opacity-100">
-          {submitting ? 'Starting sim…' : 'Find Top Gear'}
+          {submitting
+            ? 'Starting sim…'
+            : scenarios.length > 0
+              ? `Run ${scenarios.length} Scenario${scenarios.length > 1 ? 's' : ''}`
+              : 'Find Top Gear'}
         </span>
       </button>
     </div>

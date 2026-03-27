@@ -74,6 +74,7 @@ impl JobStorage for MemoryStorage {
                 player_class: s.player_class,
                 realm: s.realm,
                 dps: s.dps,
+                batch_id: j.batch_id.clone(),
             });
         }
         results
@@ -119,5 +120,14 @@ impl JobStorage for MemoryStorage {
             job.html_report = html;
             job.text_output = text;
         }
+    }
+
+    fn count_batch(&self, batch_id: &str) -> usize {
+        self.jobs
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|j| j.batch_id.as_deref() == Some(batch_id))
+            .count()
     }
 }

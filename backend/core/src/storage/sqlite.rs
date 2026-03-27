@@ -39,6 +39,7 @@ impl SqliteStorage {
              ALTER TABLE jobs ADD COLUMN text_output TEXT;",
         );
         let _ = conn.execute_batch("ALTER TABLE jobs ADD COLUMN raw_json TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE jobs ADD COLUMN batch_id TEXT;");
 
         Self {
             conn: Mutex::new(conn),
@@ -89,6 +90,7 @@ impl SqliteStorage {
             raw_json: row.get(15).ok().flatten(),
             html_report: row.get(16).ok().flatten(),
             text_output: row.get(17).ok().flatten(),
+            batch_id: row.get(18).ok().flatten(),
         })
     }
 }
@@ -100,8 +102,8 @@ impl JobStorage for SqliteStorage {
         conn.execute(
             "INSERT INTO jobs (id, status, sim_type, simc_input, result_json, combo_metadata_json,
              error_message, progress_pct, progress_stage, progress_detail, stages_completed,
-             iterations, fight_style, target_error, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             iterations, fight_style, target_error, created_at, batch_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 job.id,
                 Self::status_to_str(&job.status),
@@ -118,6 +120,7 @@ impl JobStorage for SqliteStorage {
                 job.fight_style,
                 job.target_error,
                 job.created_at,
+                job.batch_id,
             ],
         )
         .expect("Failed to insert job");
@@ -134,7 +137,7 @@ impl JobStorage for SqliteStorage {
         conn.query_row(
             "SELECT id, status, sim_type, simc_input, result_json, combo_metadata_json,
              error_message, progress_pct, progress_stage, progress_detail, stages_completed,
-             iterations, fight_style, target_error, created_at, raw_json, html_report, text_output
+             iterations, fight_style, target_error, created_at, raw_json, html_report, text_output, batch_id
              FROM jobs WHERE id = ?1",
             params![id],
             Self::row_to_job,
@@ -156,7 +159,7 @@ impl JobStorage for SqliteStorage {
             limit as u32
         };
         let mut stmt = conn.prepare(
-            "SELECT id, status, sim_type, created_at, fight_style, iterations, error_message, result_json, simc_input
+            "SELECT id, status, sim_type, created_at, fight_style, iterations, error_message, result_json, simc_input, batch_id
              FROM jobs ORDER BY created_at DESC LIMIT ?1"
         ).unwrap();
         let all: Vec<JobSummary> = stmt
@@ -177,6 +180,7 @@ impl JobStorage for SqliteStorage {
                     player_class: s.player_class,
                     realm: s.realm,
                     dps: s.dps,
+                    batch_id: row.get(9).ok().flatten(),
                 })
             })
             .unwrap()
@@ -269,5 +273,15 @@ impl JobStorage for SqliteStorage {
             params![html, text, id],
         )
         .ok();
+    }
+
+    fn count_batch(&self, batch_id: &str) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE batch_id = ?1",
+            params![batch_id],
+            |row| row.get::<_, usize>(0),
+        )
+        .unwrap_or(0)
     }
 }

@@ -8,6 +8,11 @@ import StatWeightsTable from '../../components/StatWeightsTable';
 import TopGearResults from '../../components/TopGearResults';
 
 import { API_URL } from '../../lib/api';
+import {
+  getScenarioSiblings,
+  formatScenarioLabel,
+  type ScenarioSibling,
+} from '../../lib/scenario-siblings';
 
 function SimMetadata({ result: r }: { result: Record<string, unknown> }) {
   return (
@@ -87,6 +92,11 @@ export default function SimResultClient() {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(true);
   const logCursorRef = useRef(0);
+  const [siblings, setSiblings] = useState<ScenarioSibling[] | null>(null);
+
+  useEffect(() => {
+    setSiblings(getScenarioSiblings());
+  }, []);
 
   useEffect(() => {
     if (!id || id === '_') return;
@@ -203,6 +213,33 @@ export default function SimResultClient() {
 
   return (
     <div className="space-y-6">
+      {siblings && siblings.length > 1 && (
+        <div className="card p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-[11px] uppercase tracking-wider text-muted">
+              Scenarios
+            </span>
+            <span className="h-4 w-px shrink-0 bg-border" />
+            {siblings.map((s) => {
+              const isCurrent = s.id === id;
+              return (
+                <a
+                  key={s.id}
+                  href={`/sim/${s.id}`}
+                  className={`rounded-lg border px-2.5 py-1 text-[12px] font-medium transition-all ${
+                    isCurrent
+                      ? 'border-white bg-white text-black'
+                      : 'border-border bg-surface-2 text-gray-400 hover:border-gray-500 hover:text-white'
+                  }`}
+                >
+                  {formatScenarioLabel(s)}
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {isTopGear ? (
         <>
           <TopGearResults
