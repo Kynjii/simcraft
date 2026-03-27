@@ -2,8 +2,8 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
 
-use crate::models::{Job, JobStatus, JobSummary, extract_result_summary};
 use super::JobStorage;
+use crate::models::{extract_result_summary, Job, JobStatus, JobSummary};
 
 pub struct SqliteStorage {
     conn: Mutex<Connection>,
@@ -29,17 +29,20 @@ impl SqliteStorage {
                 fight_style TEXT NOT NULL,
                 target_error REAL NOT NULL,
                 created_at TEXT NOT NULL
-            );"
-        ).expect("Failed to create jobs table");
+            );",
+        )
+        .expect("Failed to create jobs table");
 
         // Migrate: add columns if missing
         let _ = conn.execute_batch(
             "ALTER TABLE jobs ADD COLUMN html_report TEXT;
-             ALTER TABLE jobs ADD COLUMN text_output TEXT;"
+             ALTER TABLE jobs ADD COLUMN text_output TEXT;",
         );
         let _ = conn.execute_batch("ALTER TABLE jobs ADD COLUMN raw_json TEXT;");
 
-        Self { conn: Mutex::new(conn) }
+        Self {
+            conn: Mutex::new(conn),
+        }
     }
 
     fn status_to_str(status: &JobStatus) -> &'static str {
@@ -116,7 +119,8 @@ impl JobStorage for SqliteStorage {
                 job.target_error,
                 job.created_at,
             ],
-        ).expect("Failed to insert job");
+        )
+        .expect("Failed to insert job");
 
         // Garbage collect oldest jobs beyond limit
         conn.execute(
@@ -134,49 +138,70 @@ impl JobStorage for SqliteStorage {
              FROM jobs WHERE id = ?1",
             params![id],
             Self::row_to_job,
-        ).ok()
+        )
+        .ok()
     }
 
-    fn list_recent(&self, limit: usize, player: Option<&str>, realm: Option<&str>) -> Vec<JobSummary> {
+    fn list_recent(
+        &self,
+        limit: usize,
+        player: Option<&str>,
+        realm: Option<&str>,
+    ) -> Vec<JobSummary> {
         let conn = self.conn.lock().unwrap();
         // Fetch more rows than needed when filtering, since we filter in code
-        let fetch_limit = if player.is_some() || realm.is_some() { 200u32 } else { limit as u32 };
+        let fetch_limit = if player.is_some() || realm.is_some() {
+            200u32
+        } else {
+            limit as u32
+        };
         let mut stmt = conn.prepare(
             "SELECT id, status, sim_type, created_at, fight_style, iterations, error_message, result_json, simc_input
              FROM jobs ORDER BY created_at DESC LIMIT ?1"
         ).unwrap();
-        let all: Vec<JobSummary> = stmt.query_map(params![fetch_limit], |row| {
-            let status_str: String = row.get(1)?;
-            let result_json: Option<String> = row.get(7)?;
-            let simc_input: String = row.get::<_, String>(8).unwrap_or_default();
-            let s = extract_result_summary(&result_json, &simc_input);
-            Ok(JobSummary {
-                id: row.get(0)?,
-                status: Self::str_to_status(&status_str),
-                sim_type: row.get(2)?,
-                created_at: row.get(3)?,
-                fight_style: row.get(4)?,
-                iterations: row.get::<_, u32>(5)?,
-                error_message: row.get(6)?,
-                player_name: s.player_name,
-                player_class: s.player_class,
-                realm: s.realm,
-                dps: s.dps,
+        let all: Vec<JobSummary> = stmt
+            .query_map(params![fetch_limit], |row| {
+                let status_str: String = row.get(1)?;
+                let result_json: Option<String> = row.get(7)?;
+                let simc_input: String = row.get::<_, String>(8).unwrap_or_default();
+                let s = extract_result_summary(&result_json, &simc_input);
+                Ok(JobSummary {
+                    id: row.get(0)?,
+                    status: Self::str_to_status(&status_str),
+                    sim_type: row.get(2)?,
+                    created_at: row.get(3)?,
+                    fight_style: row.get(4)?,
+                    iterations: row.get::<_, u32>(5)?,
+                    error_message: row.get(6)?,
+                    player_name: s.player_name,
+                    player_class: s.player_class,
+                    realm: s.realm,
+                    dps: s.dps,
+                })
             })
-        }).unwrap().filter_map(|r| r.ok()).collect();
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
 
         if player.is_none() && realm.is_none() {
             return all;
         }
-        all.into_iter().filter(|j| {
-            if let Some(p) = player {
-                if j.player_name.as_deref() != Some(p) { return false; }
-            }
-            if let Some(r) = realm {
-                if j.realm.as_deref() != Some(r) { return false; }
-            }
-            true
-        }).take(limit).collect()
+        all.into_iter()
+            .filter(|j| {
+                if let Some(p) = player {
+                    if j.player_name.as_deref() != Some(p) {
+                        return false;
+                    }
+                }
+                if let Some(r) = realm {
+                    if j.realm.as_deref() != Some(r) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(limit)
+            .collect()
     }
 
     fn update_status(&self, id: &str, status: JobStatus) {
@@ -184,7 +209,8 @@ impl JobStorage for SqliteStorage {
         conn.execute(
             "UPDATE jobs SET status = ?1 WHERE id = ?2",
             params![Self::status_to_str(&status), id],
-        ).ok();
+        )
+        .ok();
     }
 
     fn update_progress(&self, id: &str, pct: u8, stage: &str, detail: &str) {
@@ -198,11 +224,13 @@ impl JobStorage for SqliteStorage {
     fn complete_stage(&self, id: &str, summary: &str) {
         let conn = self.conn.lock().unwrap();
         // Read current stages, append, write back
-        let current: Option<String> = conn.query_row(
-            "SELECT stages_completed FROM jobs WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        ).ok();
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT stages_completed FROM jobs WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
 
         if let Some(stages_str) = current {
             let mut stages: Vec<String> = serde_json::from_str(&stages_str).unwrap_or_default();
@@ -211,7 +239,8 @@ impl JobStorage for SqliteStorage {
             conn.execute(
                 "UPDATE jobs SET stages_completed = ?1 WHERE id = ?2",
                 params![updated, id],
-            ).ok();
+            )
+            .ok();
         }
     }
 
@@ -220,7 +249,8 @@ impl JobStorage for SqliteStorage {
         conn.execute(
             "UPDATE jobs SET result_json = ?1, raw_json = ?2, status = 'done' WHERE id = ?3",
             params![result, raw_json, id],
-        ).ok();
+        )
+        .ok();
     }
 
     fn set_error(&self, id: &str, error: String) {
@@ -228,7 +258,8 @@ impl JobStorage for SqliteStorage {
         conn.execute(
             "UPDATE jobs SET error_message = ?1, status = 'failed' WHERE id = ?2",
             params![error, id],
-        ).ok();
+        )
+        .ok();
     }
 
     fn set_report_files(&self, id: &str, html: Option<String>, text: Option<String>) {
@@ -236,6 +267,7 @@ impl JobStorage for SqliteStorage {
         conn.execute(
             "UPDATE jobs SET html_report = ?1, text_output = ?2 WHERE id = ?3",
             params![html, text, id],
-        ).ok();
+        )
+        .ok();
     }
 }
