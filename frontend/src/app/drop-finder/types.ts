@@ -3,7 +3,8 @@ export interface Instance {
   name: string;
   type: string;
   order?: number;
-  encounters: { id: number; name: string }[];
+  image_url?: string;
+  encounters: { id: number; name: string; image_url?: string }[];
 }
 
 export interface TrackInfo {
@@ -32,6 +33,7 @@ export interface DropItem {
   quality: number;
   ilevel: number;
   encounter: string;
+  instance_name?: string;
   inventory_type?: number;
   bonus_ids?: number[];
   difficulty_info?: Record<string, TrackInfo>;
