@@ -13,6 +13,8 @@ import DropSlotList from './DropSlotList';
 import {
   detectClass,
   detectSpec,
+  formatSpecName,
+  getClassSpecs,
   getTrackInfo,
   resolveUpgrade,
   type DropItem,
@@ -24,7 +26,7 @@ type Category = 'raids' | string;
 
 // --- Data loading hook ---
 
-function useDropFinderData(simcInput: string) {
+function useDropFinderData(simcInput: string, activeSpecs: Set<string>) {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [seasonConfig, setSeasonConfig] = useState<SeasonConfigResponse | null>(null);
   const [upgradeTracks, setUpgradeTracks] = useState<UpgradeTracks>({});
@@ -34,6 +36,7 @@ function useDropFinderData(simcInput: string) {
 
   const className = useMemo(() => detectClass(simcInput), [simcInput]);
   const specName = useMemo(() => detectSpec(simcInput), [simcInput]);
+  const specParam = useMemo(() => [...activeSpecs].sort().join(','), [activeSpecs]);
 
   useEffect(() => {
     fetch(`${API_URL}/api/season-config`)
@@ -102,7 +105,7 @@ function useDropFinderData(simcInput: string) {
     setLoading(true);
     const params = new URLSearchParams();
     if (className) params.set('class_name', className);
-    if (specName) params.set('spec', specName);
+    if (specParam) params.set('spec', specParam);
     const qs = params.toString();
     const url = selectedId.startsWith('type:')
       ? `${API_URL}/api/instances/type/${selectedId.slice(5)}/drops`
@@ -112,7 +115,7 @@ function useDropFinderData(simcInput: string) {
       .then((data) => setDrops(data.detail ? null : data))
       .catch(() => setDrops(null))
       .finally(() => setLoading(false));
-  }, [selectedId, className, specName]);
+  }, [selectedId, className, specParam]);
 
   return {
     instances,
@@ -146,6 +149,37 @@ function Spinner() {
 
 export default function DropFinderPage() {
   const { simcInput } = useSimContext();
+
+  // Spec selection: main spec on by default, off-specs toggleable
+  const detectedClass = useMemo(() => detectClass(simcInput), [simcInput]);
+  const detectedSpec = useMemo(() => detectSpec(simcInput), [simcInput]);
+  const allSpecs = useMemo(
+    () => (detectedClass ? getClassSpecs(detectedClass) : []),
+    [detectedClass]
+  );
+  const [activeSpecs, setActiveSpecs] = useState<Set<string>>(new Set());
+  const [prevSpec, setPrevSpec] = useState<string | null>(null);
+
+  // Reset active specs when detected spec changes (sync, not effect)
+  if (detectedSpec !== prevSpec) {
+    setPrevSpec(detectedSpec);
+    setActiveSpecs(detectedSpec ? new Set([detectedSpec]) : new Set());
+  }
+
+  function toggleSpec(spec: string) {
+    setActiveSpecs((prev) => {
+      const next = new Set(prev);
+      if (next.has(spec)) {
+        // Don't allow deselecting the last spec
+        if (next.size <= 1) return prev;
+        next.delete(spec);
+      } else {
+        next.add(spec);
+      }
+      return next;
+    });
+  }
+
   const {
     instances,
     seasonConfig,
@@ -158,7 +192,7 @@ export default function DropFinderPage() {
     dungeonCats,
     className,
     specName,
-  } = useDropFinderData(simcInput);
+  } = useDropFinderData(simcInput, activeSpecs);
 
   const hasCharacter = simcInput.trim().length >= 10;
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -201,7 +235,11 @@ export default function DropFinderPage() {
 
   const instanceOptions = useMemo(() => {
     const list = isRaid ? raids : (activeDungeonCat?.instances ?? []);
-    const allKey = isRaid ? 'type:raid' : 'type:dungeon';
+    // For raids use type:raid (all raids), for dungeons use the pool instance ID
+    // so only dungeons in the current rotation are shown
+    const allKey = isRaid
+      ? 'type:raid'
+      : String(activeDungeonCat?.cat.poolInstanceId ?? 'type:dungeon');
     return [
       { key: allKey, label: `All ${isRaid ? 'Raids' : 'Dungeons'}` },
       ...list.map((inst) => ({ key: String(inst.id), label: inst.name })),
@@ -326,9 +364,37 @@ export default function DropFinderPage() {
       )}
 
       {className ? (
-        <p className="text-xs text-gold">
-          Filtering for {specName || ''} {className.replace('_', ' ')}
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-zinc-400">
+            Showing loot for{' '}
+            <span className="font-medium text-gold">{className.replace('_', ' ')}</span>
+          </p>
+          {allSpecs.length > 1 && (
+            <>
+              <span className="h-3.5 w-px bg-border" />
+              <div className="flex flex-wrap gap-1">
+                {allSpecs.map((spec) => {
+                  const isActive = activeSpecs.has(spec);
+                  const isMain = spec === detectedSpec;
+                  return (
+                    <button
+                      key={spec}
+                      onClick={() => toggleSpec(spec)}
+                      className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-all duration-150 ${
+                        isActive
+                          ? 'border-gold/40 bg-gold/[0.08] text-gold'
+                          : 'border-border bg-surface-2 text-zinc-600 hover:border-zinc-600 hover:text-zinc-400'
+                      }`}
+                    >
+                      {formatSpecName(spec)}
+                      {isMain && <span className="ml-1 text-[9px] opacity-50">main</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
       ) : (
         <p className="text-xs text-muted">
           Paste a SimC export above to filter drops for your class.
