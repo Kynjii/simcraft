@@ -51,7 +51,7 @@ export function encodeTalentString(
   selections: Map<number, NodeSelection>,
   tree: TalentTreeData,
   specId: number,
-  version = 2,
+  version = 2
 ): string {
   const allNodes = [...tree.classNodes, ...tree.specNodes, ...tree.heroNodes];
   const nodeMap = new Map<number, TalentNode>(allNodes.map((n) => [n.id, n]));
@@ -113,18 +113,20 @@ export function encodeTalentString(
  * Some WoW talent export strings omit freeNode talents (the game auto-grants
  * them when their subtree is selected). SimC requires them to be present.
  */
-export function normalizeTalentString(
-  talentString: string,
-  tree: TalentTreeData,
-): string {
+export function normalizeTalentString(talentString: string, tree: TalentTreeData): string {
   const header = decodeHeader(talentString);
   const orderedIds = tree.fullNodeOrder;
   if (!orderedIds) return talentString;
 
-  const allNodes = [...tree.classNodes, ...tree.specNodes, ...tree.heroNodes, ...(tree.subTreeNodes ?? [])];
+  const allNodes = [
+    ...tree.classNodes,
+    ...tree.specNodes,
+    ...tree.heroNodes,
+    ...(tree.subTreeNodes ?? []),
+  ];
   const localMap = new Map(allNodes.map((n) => [n.id, n.maxRanks ?? 1]));
   const maxRanks = new Map(
-    orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1]),
+    orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1])
   );
 
   const decoded = decodeNodes(header.bits, header.offset, orderedIds, maxRanks);

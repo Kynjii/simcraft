@@ -105,15 +105,18 @@ pub(super) async fn create_top_gear_sim(
     } else {
         req.simc_input.clone()
     };
-    simc_input = apply_spec_override(&apply_talent_override(&simc_input, &req.options.talents), &req.options.spec_override);
+    simc_input = apply_spec_override(
+        &apply_talent_override(&simc_input, &req.options.talents),
+        &req.options.spec_override,
+    );
     simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
 
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let resolved = if req.catalyst {
         let currency_id = crate::item_db::catalyst_currency_id();
-        let charges = req.catalyst_charges.or_else(|| {
-            crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id)
-        });
+        let charges = req
+            .catalyst_charges
+            .or_else(|| crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id));
         gear_resolver::resolve_gear_with_catalyst(&parse_result, charges)
     } else {
         gear_resolver::resolve_gear(&parse_result)
@@ -140,8 +143,10 @@ pub(super) async fn create_top_gear_sim(
         .talent_builds
         .iter()
         .map(|tb| {
-            let normalized =
-                crate::talent_normalize::normalize_simc_talents(&format!("talents={}", tb.talent_string));
+            let normalized = crate::talent_normalize::normalize_simc_talents(&format!(
+                "talents={}",
+                tb.talent_string
+            ));
             let ts = normalized
                 .strip_prefix("talents=")
                 .unwrap_or(&tb.talent_string)
@@ -232,15 +237,18 @@ pub(super) async fn get_top_gear_combo_count(req: web::Json<TopGearRequest>) -> 
     } else {
         req.simc_input.clone()
     };
-    simc_input = apply_spec_override(&apply_talent_override(&simc_input, &req.options.talents), &req.options.spec_override);
+    simc_input = apply_spec_override(
+        &apply_talent_override(&simc_input, &req.options.talents),
+        &req.options.spec_override,
+    );
     simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
 
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let resolved = if req.catalyst {
         let currency_id = crate::item_db::catalyst_currency_id();
-        let charges = req.catalyst_charges.or_else(|| {
-            crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id)
-        });
+        let charges = req
+            .catalyst_charges
+            .or_else(|| crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id));
         gear_resolver::resolve_gear_with_catalyst(&parse_result, charges)
     } else {
         gear_resolver::resolve_gear(&parse_result)
@@ -298,7 +306,10 @@ pub(super) async fn create_droptimizer_sim(
     simc_path: web::Data<PathBuf>,
     log_buffer: web::Data<Arc<LogBuffer>>,
 ) -> HttpResponse {
-    let simc_input = apply_spec_override(&apply_talent_override(&req.simc_input, &req.options.talents), &req.options.spec_override);
+    let simc_input = apply_spec_override(
+        &apply_talent_override(&req.simc_input, &req.options.talents),
+        &req.options.spec_override,
+    );
     let simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let base_profile = parse_result.base_profile.clone();

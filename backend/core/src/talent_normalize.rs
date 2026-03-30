@@ -51,7 +51,7 @@ impl BitWriter {
 
     fn to_base64(&self) -> String {
         let mut bits = self.bits.clone();
-        while bits.len() % BITS_PER_CHAR != 0 {
+        while !bits.len().is_multiple_of(BITS_PER_CHAR) {
             bits.push(false);
         }
         let mut result = String::new();
@@ -128,7 +128,10 @@ fn normalize_talent_string(talent_str: &str) -> Option<String> {
                     }
                     let mr = node.get("maxRanks").and_then(|v| v.as_u64()).unwrap_or(1);
                     node_max_ranks.insert(id, mr);
-                    let free = node.get("freeNode").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let free = node
+                        .get("freeNode")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     if free {
                         node_is_free.insert(id, true);
                     }
@@ -209,7 +212,13 @@ fn normalize_talent_string(talent_str: &str) -> Option<String> {
             choice_index = ci as i32;
         }
 
-        selections.insert(node_id, NodeSelection { ranks, choice_index });
+        selections.insert(
+            node_id,
+            NodeSelection {
+                ranks,
+                choice_index,
+            },
+        );
     }
 
     // Auto-grant freeNode talents (only from this spec's tree, not siblings)
@@ -218,7 +227,10 @@ fn normalize_talent_string(talent_str: &str) -> Option<String> {
         if let Some(nodes) = tree.get(key).and_then(|v| v.as_array()) {
             for node in nodes {
                 let id = node.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                let free = node.get("freeNode").and_then(|v| v.as_bool()).unwrap_or(false);
+                let free = node
+                    .get("freeNode")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if free && id != 0 && !selections.contains_key(&id) {
                     let mr = node.get("maxRanks").and_then(|v| v.as_u64()).unwrap_or(1);
                     selections.insert(

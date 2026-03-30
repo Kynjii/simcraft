@@ -97,8 +97,8 @@ export default function UpgradeComparePage() {
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
   const [comboCount, setComboCount] = useState(0);
 
-  const candidates = data?.candidates ?? [];
-  const currencies = data?.currencies ?? {};
+  const candidates = useMemo(() => data?.candidates ?? [], [data]);
+  const currencies = useMemo(() => data?.currencies ?? {}, [data]);
   const hasCurrencies = Object.keys(currencies).length > 0;
 
   // Reset selection when candidates change
@@ -364,7 +364,12 @@ export default function UpgradeComparePage() {
             <>
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 16 16" fill="none">
                 <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" opacity="0.25" />
-                <path d="M14 8a6 6 0 00-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <path
+                  d="M14 8a6 6 0 00-6-6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
               </svg>
               Starting sim…
             </>

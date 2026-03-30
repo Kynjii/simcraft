@@ -13,7 +13,14 @@ use crate::types::{class_data, BonusResolved, ItemInfo};
 // ---- Upgrade Tracks (ranked) ----
 
 /// Ranked upgrade tracks, lowest to highest.
-const TRACK_RANKS: &[&str] = &["Explorer", "Adventurer", "Veteran", "Champion", "Hero", "Myth"];
+const TRACK_RANKS: &[&str] = &[
+    "Explorer",
+    "Adventurer",
+    "Veteran",
+    "Champion",
+    "Hero",
+    "Myth",
+];
 
 /// Return the numeric rank of a track name (0-based), or None if unknown.
 pub fn track_rank(track: &str) -> Option<usize> {
@@ -353,7 +360,11 @@ pub fn load(data_dir: &Path) {
             .filter_map(|entry| {
                 let id = entry.get("id")?.as_u64()?;
                 let curve_id = entry.get("curveId")?.as_u64()?;
-                if curve_id > 0 { Some((id, curve_id)) } else { None }
+                if curve_id > 0 {
+                    Some((id, curve_id))
+                } else {
+                    None
+                }
             })
             .collect();
         println!("Loaded {} squish eras", map.len());
@@ -397,10 +408,7 @@ pub fn load(data_dir: &Path) {
         .unwrap_or_default();
 
         // Find the latest conversion group (highest numeric key)
-        let latest_group = data
-            .iter()
-            .filter_map(|(k, _)| k.parse::<u64>().ok())
-            .max();
+        let latest_group = data.iter().filter_map(|(k, _)| k.parse::<u64>().ok()).max();
 
         if let Some(group_id) = latest_group {
             if let Some(group) = data.get(&group_id.to_string()) {
@@ -413,7 +421,8 @@ pub fn load(data_dir: &Path) {
                             Some(id) => id,
                             None => continue,
                         };
-                        let mut inv_type = match item.get("inventoryType").and_then(|v| v.as_u64()) {
+                        let mut inv_type = match item.get("inventoryType").and_then(|v| v.as_u64())
+                        {
                             Some(t) => t,
                             None => continue,
                         };
@@ -557,12 +566,7 @@ pub fn filter_ilevel_bonus_ids(bonus_ids: &[u64]) -> Vec<u64> {
     };
     bonus_ids
         .iter()
-        .filter(|&&bid| {
-            bonuses
-                .get(&bid)
-                .and_then(|b| b.get("itemLevel"))
-                .is_some()
-        })
+        .filter(|&&bid| bonuses.get(&bid).and_then(|b| b.get("itemLevel")).is_some())
         .copied()
         .collect()
 }
@@ -639,7 +643,11 @@ pub(crate) fn resolve_bonuses(bonus_ids: &[u64]) -> BonusResolved {
                     }
                 }
             }
-            if let Some(offset) = bonus.get("levelOffset").and_then(|lo| lo.get("amount")).and_then(|a| a.as_i64()) {
+            if let Some(offset) = bonus
+                .get("levelOffset")
+                .and_then(|lo| lo.get("amount"))
+                .and_then(|a| a.as_i64())
+            {
                 level_offset += offset;
             }
             if let Some(tag) = bonus.get("tag").and_then(|t| t.as_str()) {
@@ -702,11 +710,22 @@ pub fn get_item_info(item_id: u64, bonus_ids: Option<&[u64]>) -> Option<ItemInfo
     let mut bonus_set_ilevel = false;
     if let Some(bids) = bonus_ids {
         let resolved = resolve_bonuses(bids);
-        if let Some(q) = resolved.quality { quality = q; }
-        if let Some(i) = resolved.ilevel { ilevel = i; bonus_set_ilevel = true; }
-        if let Some(t) = resolved.tag { tag = t; }
-        if let Some(s) = resolved.sockets { sockets = s; }
-        if let Some(u) = resolved.upgrade { upgrade = u; }
+        if let Some(q) = resolved.quality {
+            quality = q;
+        }
+        if let Some(i) = resolved.ilevel {
+            ilevel = i;
+            bonus_set_ilevel = true;
+        }
+        if let Some(t) = resolved.tag {
+            tag = t;
+        }
+        if let Some(s) = resolved.sockets {
+            sockets = s;
+        }
+        if let Some(u) = resolved.upgrade {
+            upgrade = u;
+        }
     }
 
     // Only apply squish to the base DB ilevel — bonus-resolved ilevels are already correct
@@ -715,14 +734,28 @@ pub fn get_item_info(item_id: u64, bonus_ids: Option<&[u64]>) -> Option<ItemInfo
     }
 
     let item_class = item.get("itemClass").and_then(|c| c.as_u64()).unwrap_or(0);
-    let item_subclass = item.get("itemSubClass").and_then(|s| s.as_u64()).unwrap_or(0);
+    let item_subclass = item
+        .get("itemSubClass")
+        .and_then(|s| s.as_u64())
+        .unwrap_or(0);
     let armor_subclass = if item_class == 4 { item_subclass } else { 0 };
-    let inventory_type = item.get("inventoryType").and_then(|v| v.as_u64()).unwrap_or(0);
+    let inventory_type = item
+        .get("inventoryType")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     Some(ItemInfo {
         item_id,
-        name: item.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string(),
-        icon: item.get("icon").and_then(|i| i.as_str()).unwrap_or("inv_misc_questionmark").to_string(),
+        name: item
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        icon: item
+            .get("icon")
+            .and_then(|i| i.as_str())
+            .unwrap_or("inv_misc_questionmark")
+            .to_string(),
         ilevel,
         quality,
         quality_name: class_data::quality_name(quality).to_string(),

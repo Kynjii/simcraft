@@ -220,8 +220,18 @@ pub fn generate_top_gear_input_with_talents(
 
         // Catalyst constraint: max N catalyst items per combination
         if let Some(charges) = catalyst_charges {
-            let cat_count = gear_set.values().filter(|it| it.get("is_catalyst").and_then(|v| v.as_bool()).unwrap_or(false)).count();
-            eprintln!("[catalyst] combo: cat_count={}, charges={}", cat_count, charges);
+            let cat_count = gear_set
+                .values()
+                .filter(|it| {
+                    it.get("is_catalyst")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
+                .count();
+            eprintln!(
+                "[catalyst] combo: cat_count={}, charges={}",
+                cat_count, charges
+            );
             if !validate_catalyst_constraint(&gear_set, charges) {
                 continue;
             }
@@ -363,11 +373,8 @@ pub fn generate_top_gear_input_with_talents(
                 // Additional talents: need equipped gear as a combo too, plus alternatives
                 Box::new(
                     std::iter::once(true)
-                        .chain(std::iter::repeat(false).take(valid_combos.len()))
-                        .zip(
-                            std::iter::once(&empty_gear_set)
-                                .chain(valid_combos.iter()),
-                        ),
+                        .chain(std::iter::repeat_n(false, valid_combos.len()))
+                        .zip(std::iter::once(&empty_gear_set).chain(valid_combos.iter())),
                 )
             };
 
@@ -395,10 +402,8 @@ pub fn generate_top_gear_input_with_talents(
                     let slot_str = slot.to_string();
                     if let Some(item) = gear_set.get(&slot_str) {
                         if *slot == "main_hand" {
-                            let item_id =
-                                item.get("item_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let inv_type =
-                                game_data::get_inventory_type(item_id).unwrap_or(0);
+                            let item_id = item.get("item_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let inv_type = game_data::get_inventory_type(item_id).unwrap_or(0);
                             if inv_type == 17 && spec != "fury" {
                                 combo_mh_is_two_hand = true;
                             }
@@ -583,7 +588,11 @@ fn item_meta(item: &Value, slot: &str) -> Value {
         "is_kept": item.get("is_equipped").and_then(|v| v.as_bool()).unwrap_or(false),
         "origin": item.get("origin").and_then(|v| v.as_str()).unwrap_or("bags"),
     });
-    if item.get("is_catalyst").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if item
+        .get("is_catalyst")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         meta["is_catalyst"] = json!(true);
     }
     meta

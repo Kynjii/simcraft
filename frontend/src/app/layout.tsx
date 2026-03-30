@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <UpdateChecker />
         <SimProvider>
           <header className="desktop-drag sticky top-0 z-50 border-b border-border/80 bg-bg/90 backdrop-blur-xl">
-            <div className="flex h-11 items-center justify-between desktop-header:h-11">
+            <div className="desktop-header:h-11 flex h-11 items-center justify-between">
               <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6">
                 <a
                   href="https://simhammer.com"

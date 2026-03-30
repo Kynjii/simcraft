@@ -235,8 +235,7 @@ pub(super) fn apply_spec_override(simc_input: &str, spec: &str) -> String {
     }
     let re = regex::Regex::new(r"(?m)^spec=.+$").unwrap();
     if re.is_match(simc_input) {
-        re.replace(simc_input, format!("spec={}", spec))
-            .to_string()
+        re.replace(simc_input, format!("spec={}", spec)).to_string()
     } else {
         format!("{}\nspec={}", simc_input, spec)
     }

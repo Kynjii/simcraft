@@ -50,7 +50,9 @@ function readBits(bits: boolean[], pos: number, width: number): [number, number]
 }
 
 /** Decode the header of a talent export string. Returns specId and the bit offset to start reading nodes. */
-export function decodeHeader(talentString: string): DecodedHeader & { bits: boolean[]; offset: number } {
+export function decodeHeader(
+  talentString: string
+): DecodedHeader & { bits: boolean[]; offset: number } {
   const bits = toBits(talentString);
   let pos = 0;
 
@@ -79,7 +81,7 @@ export function decodeNodes(
   bits: boolean[],
   offset: number,
   sortedNodeIds: number[],
-  nodeMaxRanks: Map<number, number>,
+  nodeMaxRanks: Map<number, number>
 ): Map<number, NodeSelection> {
   const selections = new Map<number, NodeSelection>();
   let pos = offset;

@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSimContext } from './SimContext';
-import { parseTalentLoadouts, SPEC_ID_TO_NAME, specDisplayName, classColorForSpec } from '../lib/types';
+import {
+  parseTalentLoadouts,
+  SPEC_ID_TO_NAME,
+  specDisplayName,
+  classColorForSpec,
+} from '../lib/types';
 import type { TalentLoadoutParsed } from '../lib/types';
 import { decodeHeader, decodeNodes } from '../lib/talentDecode';
 import { encodeTalentString } from '../lib/talentEncode';
@@ -14,17 +19,22 @@ import TalentTree from './TalentTree';
 /** Check if a talent build has all points allocated. */
 function getBuildStatus(
   talentString: string,
-  tree: TalentTreeData | null,
+  tree: TalentTreeData | null
 ): { complete: boolean; classSpent: number; specSpent: number } | null {
   if (!tree || !talentString) return null;
   try {
     const header = decodeHeader(talentString);
     const orderedIds = tree.fullNodeOrder;
     if (!orderedIds) return null;
-    const allNodes = [...tree.classNodes, ...tree.specNodes, ...tree.heroNodes, ...(tree.subTreeNodes ?? [])];
+    const allNodes = [
+      ...tree.classNodes,
+      ...tree.specNodes,
+      ...tree.heroNodes,
+      ...(tree.subTreeNodes ?? []),
+    ];
     const localMap = new Map(allNodes.map((n) => [n.id, n.maxRanks ?? 1]));
     const maxRanks = new Map(
-      orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1]),
+      orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1])
     );
     const decoded = decodeNodes(header.bits, header.offset, orderedIds, maxRanks);
     // Auto-grant free nodes for accurate counting
@@ -48,7 +58,8 @@ function getBuildStatus(
 type ViewMode = 'collapsed' | 'view' | 'edit';
 
 export default function TalentPicker() {
-  const { simcInput, selectedTalent, setSelectedTalent, talentBuilds, setTalentBuilds } = useSimContext();
+  const { simcInput, selectedTalent, setSelectedTalent, talentBuilds, setTalentBuilds } =
+    useSimContext();
   const [viewMode, setViewMode] = useState<ViewMode>('collapsed');
   const [compareMode, setCompareMode] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -63,11 +74,10 @@ export default function TalentPicker() {
 
   const addonLoadouts = useMemo(() => parseTalentLoadouts(simcInput), [simcInput]);
 
-
   // Merge addon loadouts + custom (imported/blank) loadouts
   const allLoadouts = useMemo(
     () => [...addonLoadouts, ...customLoadouts],
-    [addonLoadouts, customLoadouts],
+    [addonLoadouts, customLoadouts]
   );
 
   const currentTalent = allLoadouts[selectedLoadoutIdx]?.talentString || '';
@@ -125,7 +135,7 @@ export default function TalentPicker() {
         });
       }
     },
-    [setSelectedTalent, addonLoadouts.length, selectedLoadoutIdx],
+    [setSelectedTalent, addonLoadouts.length, selectedLoadoutIdx]
   );
 
   const addCustomLoadout = useCallback(
@@ -140,7 +150,7 @@ export default function TalentPicker() {
       setSelectedLoadoutIdx(newIdx);
       setSelectedTalent(talentStr);
     },
-    [addonLoadouts.length, customLoadouts.length, setSelectedTalent],
+    [addonLoadouts.length, customLoadouts.length, setSelectedTalent]
   );
 
   // Import a talent string (raw hash or wowhead URL)
@@ -168,13 +178,14 @@ export default function TalentPicker() {
     // If imported build is a different spec, prefix the name with the spec
     const importedSpecName = SPEC_ID_TO_NAME[importedSpecId];
     const isDifferentSpec = specId != null && importedSpecId !== specId;
-    const prefix = isDifferentSpec && importedSpecName ? `${specDisplayName(importedSpecName)} ` : '';
+    const prefix =
+      isDifferentSpec && importedSpecName ? `${specDisplayName(importedSpecName)} ` : '';
     const name = `${prefix}Import ${customLoadouts.length + 1}`;
     addCustomLoadout(name, talentStr);
     setShowImport(false);
     setImportValue('');
     setViewMode('view');
-  }, [importValue, customLoadouts.length, addCustomLoadout]);
+  }, [importValue, customLoadouts.length, addCustomLoadout, specId]);
 
   // Start from scratch
   const handleBlankBuild = useCallback(() => {
@@ -185,21 +196,17 @@ export default function TalentPicker() {
     setViewMode('edit');
   }, [specId, tree, customLoadouts.length, addCustomLoadout]);
 
-
   // Track selected indices for compare mode (avoids duplicate talent string issues)
   const [compareIndices, setCompareIndices] = useState<Set<number>>(new Set());
 
-  const toggleCompareLoadout = useCallback(
-    (idx: number) => {
-      setCompareIndices((prev) => {
-        const next = new Set(prev);
-        if (next.has(idx)) next.delete(idx);
-        else next.add(idx);
-        return next;
-      });
-    },
-    [],
-  );
+  const toggleCompareLoadout = useCallback((idx: number) => {
+    setCompareIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
 
   // Sync talentBuilds from compareIndices
   useEffect(() => {
@@ -374,7 +381,9 @@ export default function TalentPicker() {
               try {
                 loadoutSpecId = decodeHeader(l.talentString).specId;
                 loadoutSpecName = SPEC_ID_TO_NAME[loadoutSpecId];
-              } catch { /* ignore */ }
+              } catch {
+                /* ignore */
+              }
               return (
                 <button
                   key={`${l.name}-${i}`}
@@ -411,12 +420,20 @@ export default function TalentPicker() {
                       }`}
                     >
                       {checked && (
-                        <svg className="h-2.5 w-2.5 text-black" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg
+                          className="h-2.5 w-2.5 text-black"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
                           <path d="M2 6l3 3 5-5" />
                         </svg>
                       )}
                     </div>
-                    <span className={`truncate text-[10px] font-medium ${checked ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                    <span
+                      className={`truncate text-[10px] font-medium ${checked ? 'text-zinc-200' : 'text-zinc-500'}`}
+                    >
                       {l.name}
                       {l.isActive ? ' (eq)' : ''}
                     </span>

@@ -11,7 +11,7 @@ export const SPEC_POINTS = 34;
 /** Count points spent (non-free, non-entry nodes only). */
 export function getPointsSpent(
   selections: Map<number, NodeSelection>,
-  nodes: TalentNode[],
+  nodes: TalentNode[]
 ): number {
   let total = 0;
   for (const node of nodes) {
@@ -27,7 +27,7 @@ export function canSelectNode(
   nodeId: number,
   selections: Map<number, NodeSelection>,
   tree: TalentTreeData,
-  nodeMap: Map<number, TalentNode>,
+  nodeMap: Map<number, TalentNode>
 ): boolean {
   const node = nodeMap.get(nodeId);
   if (!node) return false;
@@ -74,7 +74,7 @@ export function canDeselectNode(
   nodeId: number,
   selections: Map<number, NodeSelection>,
   tree: TalentTreeData,
-  nodeMap: Map<number, TalentNode>,
+  nodeMap: Map<number, TalentNode>
 ): boolean {
   const node = nodeMap.get(nodeId);
   if (!node) return false;
@@ -120,7 +120,7 @@ export function toggleNode(
   nodeId: number,
   selections: Map<number, NodeSelection>,
   tree: TalentTreeData,
-  nodeMap: Map<number, TalentNode>,
+  nodeMap: Map<number, TalentNode>
 ): Map<number, NodeSelection> {
   const node = nodeMap.get(nodeId);
   if (!node) return selections;
@@ -155,7 +155,7 @@ export function decrementNode(
   nodeId: number,
   selections: Map<number, NodeSelection>,
   tree: TalentTreeData,
-  nodeMap: Map<number, TalentNode>,
+  nodeMap: Map<number, TalentNode>
 ): Map<number, NodeSelection> {
   const node = nodeMap.get(nodeId);
   if (!node) return selections;
@@ -180,7 +180,7 @@ export function decrementNode(
 export function cycleChoice(
   nodeId: number,
   selections: Map<number, NodeSelection>,
-  nodeMap: Map<number, TalentNode>,
+  nodeMap: Map<number, TalentNode>
 ): Map<number, NodeSelection> {
   const node = nodeMap.get(nodeId);
   if (!node || node.type !== 'choice') return selections;
@@ -210,7 +210,7 @@ function getSectionBudget(node: TalentNode, tree: TalentTreeData): number {
 
 function getActiveSubTreeId(
   selections: Map<number, NodeSelection>,
-  tree: TalentTreeData,
+  tree: TalentTreeData
 ): number | null {
   if (!tree.subTreeNodes) return null;
   for (const stNode of tree.subTreeNodes) {

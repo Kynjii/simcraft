@@ -145,7 +145,8 @@ pub(super) async fn resolve_gear(req: web::Json<ResolveGearRequest>) -> HttpResp
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     // Always parse catalyst charges so the frontend can show the toggle
     let currency_id = crate::item_db::catalyst_currency_id();
-    let catalyst_charges = crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id);
+    let catalyst_charges =
+        crate::addon_parser::parse_catalyst_charges(&req.simc_input, currency_id);
     let mut resolved = if req.catalyst && catalyst_charges.is_some() {
         gear_resolver::resolve_gear_with_catalyst(&parse_result, catalyst_charges)
     } else {
@@ -159,9 +160,7 @@ pub(super) async fn get_talent_tree(path: web::Path<u64>) -> HttpResponse {
     let spec_id = path.into_inner();
     let tree = match game_data::talent_tree(spec_id) {
         Some(t) => t,
-        None => {
-            return HttpResponse::NotFound().json(json!({"detail": "Talent tree not found"}))
-        }
+        None => return HttpResponse::NotFound().json(json!({"detail": "Talent tree not found"})),
     };
 
     // Build fullNodeMaxRanks by combining all specs of the same class.

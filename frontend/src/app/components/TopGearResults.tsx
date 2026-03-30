@@ -7,13 +7,13 @@ import type { GearItem } from './GearOverview';
 import { SLOT_LABELS, specDisplayName } from '../lib/types';
 import type { EnchantInfo, GemInfo, ItemInfo, ItemQuery } from '../lib/useItemInfo';
 import {
-    getIconUrl,
-    getWowheadData,
-    getWowheadUrl,
-    QUALITY_COLORS,
-    useEnchantInfo,
-    useGemInfo,
-    useItemInfo,
+  getIconUrl,
+  getWowheadData,
+  getWowheadUrl,
+  QUALITY_COLORS,
+  useEnchantInfo,
+  useGemInfo,
+  useItemInfo,
 } from '../lib/useItemInfo';
 import { useWowheadTooltips } from '../lib/useWowheadTooltips';
 
@@ -384,8 +384,7 @@ function ResultRow({
   gemInfoMap: Record<number, GemInfo>;
 }) {
   const barWidth = maxDps > 0 ? (result.dps / maxDps) * 100 : 0;
-  const isEquipped =
-    result.items.length === 0 || result.name.startsWith('Currently Equipped');
+  const isEquipped = result.items.length === 0 || result.name.startsWith('Currently Equipped');
   const hasTalentBuild = !!result.talent_build;
   const talentBadge = hasTalentBuild ? (
     <span className="inline-flex shrink-0 items-center gap-1 rounded bg-purple-500/10 px-1.5 py-px text-[9px] font-medium">

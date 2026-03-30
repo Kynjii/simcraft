@@ -75,7 +75,7 @@ const cache: Record<number, TalentTreeData> = {};
 
 export function useTalentTree(specId: number | null): TalentTreeData | null {
   const [tree, setTree] = useState<TalentTreeData | null>(
-    specId != null ? cache[specId] ?? null : null,
+    specId != null ? (cache[specId] ?? null) : null
   );
 
   useEffect(() => {

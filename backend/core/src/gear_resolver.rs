@@ -174,7 +174,10 @@ pub fn resolve_gear_with_catalyst(
     resolve_gear_impl(parse_result, catalyst_charges)
 }
 
-fn resolve_gear_impl(parse_result: &ParseResult, catalyst_charges: Option<u32>) -> ResolveGearResponse {
+fn resolve_gear_impl(
+    parse_result: &ParseResult,
+    catalyst_charges: Option<u32>,
+) -> ResolveGearResponse {
     let character = &parse_result.character;
     let spec = character.spec.as_deref().unwrap_or("");
     let class_name = character.class_name.as_deref().unwrap_or("");
@@ -303,7 +306,10 @@ fn resolve_gear_impl(parse_result: &ParseResult, catalyst_charges: Option<u32>) 
         if let Some(weapons) = allowed_weapons {
             if let Some(raw) = item_db::get_raw_item(item.item_id) {
                 let item_class = raw.get("itemClass").and_then(|v| v.as_u64()).unwrap_or(0);
-                let item_subclass = raw.get("itemSubClass").and_then(|v| v.as_u64()).unwrap_or(0);
+                let item_subclass = raw
+                    .get("itemSubClass")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 if item_class == 2 && !weapons.contains(&item_subclass) {
                     weapon_excluded = true;
                 }
@@ -372,7 +378,7 @@ fn resolve_gear_impl(parse_result: &ParseResult, catalyst_charges: Option<u32>) 
         slots,
         excluded,
         talent_loadouts: parse_result.talent_loadouts.clone(),
-        catalyst_charges: catalyst_charges,
+        catalyst_charges,
     }
 }
 
@@ -432,18 +438,31 @@ fn build_catalyst_item(
     let new_simc = simc_parts.join("");
 
     // Enrich from the tier item
-    let (name, icon, quality, tag, upgrade) = if let Some(info) = item_db::get_item_info(tier_item_id, Some(&catalyst_bonus_ids)) {
-        (info.name, info.icon, info.quality, info.tag, info.upgrade)
-    } else {
-        (tier_info.name.clone(), tier_info.icon.clone(), 4, String::new(), String::new())
-    };
+    let (name, icon, quality, tag, upgrade) =
+        if let Some(info) = item_db::get_item_info(tier_item_id, Some(&catalyst_bonus_ids)) {
+            (info.name, info.icon, info.quality, info.tag, info.upgrade)
+        } else {
+            (
+                tier_info.name.clone(),
+                tier_info.icon.clone(),
+                4,
+                String::new(),
+                String::new(),
+            )
+        };
 
     let bonus_key = catalyst_bonus_ids
         .iter()
         .map(|b| b.to_string())
         .collect::<Vec<_>>()
         .join(":");
-    let uid = format!("{}:{}:{}:{}", tier_item_id, bonus_key, source.origin.as_str(), slot);
+    let uid = format!(
+        "{}:{}:{}:{}",
+        tier_item_id,
+        bonus_key,
+        source.origin.as_str(),
+        slot
+    );
 
     ResolvedItem {
         uid,
@@ -451,7 +470,7 @@ fn build_catalyst_item(
         item_id: tier_item_id,
         ilevel: source.ilevel,
         simc_string: new_simc,
-        origin: source.origin.clone(),
+        origin: source.origin,
         bonus_ids: catalyst_bonus_ids,
         enchant_id: source.enchant_id,
         gem_id: source.gem_id,
@@ -474,10 +493,7 @@ fn build_catalyst_item(
 /// For each slot, checks every item (equipped + bag). If the item is minimum
 /// veteran track and a catalyst conversion exists, creates the catalyst variant
 /// unless an identical or higher-ilevel version already exists in that slot.
-fn generate_catalyst_alternatives(
-    slots: &mut HashMap<String, SlotResolution>,
-    wow_class_id: u64,
-) {
+fn generate_catalyst_alternatives(slots: &mut HashMap<String, SlotResolution>, wow_class_id: u64) {
     let slot_keys: Vec<String> = slots.keys().cloned().collect();
 
     for slot_key in &slot_keys {

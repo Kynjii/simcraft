@@ -245,6 +245,9 @@ export default function SimResultClient() {
             targetError={r.target_error as number | undefined}
             elapsedTime={r.elapsed_time_seconds as number | undefined}
           />
+          {typeof r.talent_string === 'string' && r.talent_string && (
+            <TalentTree talentString={r.talent_string as string} />
+          )}
         </>
       ) : (
         <>
@@ -261,16 +264,17 @@ export default function SimResultClient() {
             targetError={r.target_error as number | undefined}
             elapsedTime={r.elapsed_time_seconds as number | undefined}
           />
-          {r.equipped_gear && Object.keys(r.equipped_gear as Record<string, unknown>).length > 0 && (
-            <GearOverview
-              gear={r.equipped_gear as Record<string, GearItem>}
-              characterRenderUrl={
-                r.realm && r.player_name
-                  ? `https://simhammer.com/api/blizzard/character/${encodeURIComponent((r.realm as string).toLowerCase())}/${encodeURIComponent((r.player_name as string).toLowerCase())}/media/render`
-                  : null
-              }
-            />
-          )}
+          {r.equipped_gear &&
+            Object.keys(r.equipped_gear as Record<string, unknown>).length > 0 && (
+              <GearOverview
+                gear={r.equipped_gear as Record<string, GearItem>}
+                characterRenderUrl={
+                  r.realm && r.player_name
+                    ? `https://simhammer.com/api/blizzard/character/${encodeURIComponent((r.realm as string).toLowerCase())}/${encodeURIComponent((r.player_name as string).toLowerCase())}/media/render`
+                    : null
+                }
+              />
+            )}
           {typeof r.talent_string === 'string' && r.talent_string && (
             <TalentTree talentString={r.talent_string as string} />
           )}

@@ -95,7 +95,7 @@ export default function TopGearPage() {
     return () => clearTimeout(timer);
   }, [simcInput, maxUpgrade, catalyst]);
 
-  function buildSubmitInput(): string {
+  const buildSubmitInput = useCallback((): string => {
     let result = simcInput;
     if (localItems.length > 0) {
       const vaultItems = localItems.filter((li) => li.origin === 'vault');
@@ -116,9 +116,9 @@ export default function TopGearPage() {
       }
     }
     return result;
-  }
+  }, [simcInput, localItems]);
 
-  function buildSelectedUidsJson(): Record<string, string[]> {
+  const buildSelectedUidsJson = useCallback((): Record<string, string[]> => {
     const result: Record<string, string[]> = {};
     for (const [slot, uids] of Object.entries(selectedUids)) {
       if (uids.size > 0) {
@@ -126,7 +126,7 @@ export default function TopGearPage() {
       }
     }
     return result;
-  }
+  }, [selectedUids]);
 
   // Fetch combo count whenever selection changes
   useEffect(() => {
@@ -151,7 +151,14 @@ export default function TopGearPage() {
             max_upgrade: maxUpgrade,
             copy_enchants: copyEnchants,
             ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
-            ...(talentBuilds.length > 1 ? { talent_builds: talentBuilds.map(tb => ({ name: tb.name, talent_string: tb.talentString })) } : {}),
+            ...(talentBuilds.length > 1
+              ? {
+                  talent_builds: talentBuilds.map((tb) => ({
+                    name: tb.name,
+                    talent_string: tb.talentString,
+                  })),
+                }
+              : {}),
             catalyst,
             ...(catalyst && catalystCharges != null ? { catalyst_charges: catalystCharges } : {}),
           }),
@@ -176,7 +183,19 @@ export default function TopGearPage() {
     return () => {
       controller.abort();
     };
-  }, [selectedUids, resolved, localItems, maxUpgrade, copyEnchants, maxCombinations, talentBuilds, catalyst, catalystCharges]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    selectedUids,
+    resolved,
+    localItems,
+    maxUpgrade,
+    copyEnchants,
+    maxCombinations,
+    talentBuilds,
+    catalyst,
+    catalystCharges,
+    buildSelectedUidsJson,
+    buildSubmitInput,
+  ]);
 
   const buildPayload = useCallback(
     () => ({
@@ -186,12 +205,27 @@ export default function TopGearPage() {
       max_upgrade: maxUpgrade,
       copy_enchants: copyEnchants,
       ...(maxCombinations != null ? { max_combinations: maxCombinations } : {}),
-      ...(talentBuilds.length > 1 ? { talent_builds: talentBuilds.map(tb => ({ name: tb.name, talent_string: tb.talentString })) } : {}),
+      ...(talentBuilds.length > 1
+        ? {
+            talent_builds: talentBuilds.map((tb) => ({
+              name: tb.name,
+              talent_string: tb.talentString,
+            })),
+          }
+        : {}),
       catalyst,
       ...(catalyst && catalystCharges != null ? { catalyst_charges: catalystCharges } : {}),
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [simcInput, localItems, selectedUids, maxUpgrade, copyEnchants, maxCombinations, talentBuilds, catalyst, catalystCharges]
+    [
+      buildSubmitInput,
+      buildSelectedUidsJson,
+      maxUpgrade,
+      copyEnchants,
+      maxCombinations,
+      talentBuilds,
+      catalyst,
+      catalystCharges,
+    ]
   );
 
   const validate = useCallback(() => {
@@ -214,7 +248,7 @@ export default function TopGearPage() {
       </p>
     );
   } else {
-    console.log(resolved)
+    console.log(resolved);
   }
 
   return (

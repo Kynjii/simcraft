@@ -370,17 +370,23 @@ export default function SimSharedConfig() {
         />
         {checksumStatus === 'invalid' && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-            <svg className="h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <svg
+              className="h-4 w-4 shrink-0 text-amber-400"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            >
               <path d="M8 1L1 14h14L8 1zM8 6v4M8 12v.5" />
             </svg>
             <p className="text-[12px] text-amber-300">
-              This input appears to have been manually edited. Results may not reflect your actual in-game character.
+              This input appears to have been manually edited. Results may not reflect your actual
+              in-game character.
             </p>
           </div>
         )}
-        {detectedInfo && (
-          <CharacterInfoBar info={detectedInfo} />
-        )}
+        {detectedInfo && <CharacterInfoBar info={detectedInfo} />}
       </div>
       <TalentPicker />
       <AdvancedOptions />

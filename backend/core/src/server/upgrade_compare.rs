@@ -187,9 +187,7 @@ fn bonuses_in_same_group(a: u64, b: u64) -> bool {
 
 /// Returns everything the frontend needs to render the upgrade-compare UI in one call:
 /// equipped items, upgrade options per slot, currency budget with metadata.
-pub(super) async fn get_upgrade_compare_prepare(
-    req: web::Json<serde_json::Value>,
-) -> HttpResponse {
+pub(super) async fn get_upgrade_compare_prepare(req: web::Json<serde_json::Value>) -> HttpResponse {
     let simc_input = req.get("simc_input").and_then(|v| v.as_str()).unwrap_or("");
     if simc_input.len() < 10 {
         return HttpResponse::BadRequest().json(json!({ "detail": "SimC input too short." }));
@@ -337,7 +335,10 @@ pub(super) async fn get_upgrade_compare_prepare(
 pub(super) async fn get_upgrade_compare_combo_count(
     req: web::Json<UpgradeCompareRequest>,
 ) -> HttpResponse {
-    let simc_input = crate::talent_normalize::normalize_simc_talents(&apply_talent_override(&req.simc_input, &req.options.talents));
+    let simc_input = crate::talent_normalize::normalize_simc_talents(&apply_talent_override(
+        &req.simc_input,
+        &req.options.talents,
+    ));
 
     let prepared = match prepare_upgrade_compare(&simc_input, &req.selected_slots) {
         Ok(v) => v,
@@ -369,7 +370,10 @@ pub(super) async fn create_upgrade_compare_sim(
     simc_path: web::Data<PathBuf>,
     log_buffer: web::Data<Arc<LogBuffer>>,
 ) -> HttpResponse {
-    let simc_input = crate::talent_normalize::normalize_simc_talents(&apply_talent_override(&req.simc_input, &req.options.talents));
+    let simc_input = crate::talent_normalize::normalize_simc_talents(&apply_talent_override(
+        &req.simc_input,
+        &req.options.talents,
+    ));
 
     let prepared = match prepare_upgrade_compare(&simc_input, &req.selected_slots) {
         Ok(v) => v,

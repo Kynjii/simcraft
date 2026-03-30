@@ -79,10 +79,15 @@ export default function TalentTree({
     if (!orderedIds) return null;
 
     // Use backend-provided maxRanks (covers all specs), fall back to local nodes
-    const localNodes = [...tree.classNodes, ...tree.specNodes, ...tree.heroNodes, ...(tree.subTreeNodes ?? [])];
+    const localNodes = [
+      ...tree.classNodes,
+      ...tree.specNodes,
+      ...tree.heroNodes,
+      ...(tree.subTreeNodes ?? []),
+    ];
     const localMap = new Map(localNodes.map((n) => [n.id, n.maxRanks ?? 1]));
     const maxRanks = new Map(
-      orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1]),
+      orderedIds.map((id) => [id, tree.fullNodeMaxRanks?.[id] ?? localMap.get(id) ?? 1])
     );
     const decoded = decodeNodes(header.bits, header.offset, orderedIds, maxRanks);
 
@@ -141,7 +146,7 @@ export default function TalentTree({
         return next;
       });
     },
-    [editable, tree, nodeMap],
+    [editable, tree, nodeMap]
   );
 
   const handleNodeRightClick = useCallback(
@@ -153,7 +158,7 @@ export default function TalentTree({
         return next;
       });
     },
-    [editable, tree, nodeMap],
+    [editable, tree, nodeMap]
   );
 
   const handleChoiceCycle = useCallback(
@@ -165,7 +170,7 @@ export default function TalentTree({
         return next;
       });
     },
-    [editable, nodeMap],
+    [editable, nodeMap]
   );
 
   useWowheadTooltips([selections]);
@@ -199,15 +204,15 @@ export default function TalentTree({
   if (mini) {
     return (
       <div className="flex h-full w-full items-stretch gap-0.5">
-        <div className="flex-[2] min-w-0">
+        <div className="min-w-0 flex-[2]">
           <MiniTreeSvg nodes={tree.classNodes} selections={selections} allNodes={allNodesArr} />
         </div>
         {activeHeroNodes.length > 0 && (
-          <div className="flex-1 min-w-0 self-center h-[45%]">
+          <div className="h-[45%] min-w-0 flex-1 self-center">
             <MiniTreeSvg nodes={activeHeroNodes} selections={selections} allNodes={allNodesArr} />
           </div>
         )}
-        <div className="flex-[2] min-w-0">
+        <div className="min-w-0 flex-[2]">
           <MiniTreeSvg nodes={tree.specNodes} selections={selections} allNodes={allNodesArr} />
         </div>
       </div>
@@ -362,15 +367,13 @@ function TreeSection({
                   strokeLinecap="round"
                 />
               );
-            }),
+            })
         )}
         {/* Nodes */}
         {nodes.map((node) => {
           const sel = selections.get(node.id);
           const selectable =
-            editable && tree && nodeMap
-              ? canSelectNode(node.id, selections, tree, nodeMap)
-              : false;
+            editable && tree && nodeMap ? canSelectNode(node.id, selections, tree, nodeMap) : false;
           const deselectable =
             editable && tree && nodeMap
               ? canDeselectNode(node.id, selections, tree, nodeMap)
@@ -420,7 +423,12 @@ function TalentNodeSvg({
 
   // For choice nodes, pick the selected entry; otherwise use first
   let entry = node.entries[0];
-  if (isChoice && selection && selection.choiceIndex >= 0 && selection.choiceIndex < node.entries.length) {
+  if (
+    isChoice &&
+    selection &&
+    selection.choiceIndex >= 0 &&
+    selection.choiceIndex < node.entries.length
+  ) {
     entry = node.entries[selection.choiceIndex];
   }
 
@@ -437,13 +445,7 @@ function TalentNodeSvg({
       : 'rgba(255,255,255,0.1)';
   const borderWidth = isSelected ? 12 : 6;
 
-  const opacity = isSelected
-    ? 1
-    : editable
-      ? selectable
-        ? 0.5
-        : LOCKED_ICON
-      : DIM_ICON;
+  const opacity = isSelected ? 1 : editable ? (selectable ? 0.5 : LOCKED_ICON) : DIM_ICON;
 
   const handleClick = () => {
     if (!editable) return;
@@ -574,7 +576,10 @@ function MiniTreeSvg({
 
   if (nodes.length === 0) return null;
 
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
   for (const n of nodes) {
     minX = Math.min(minX, n.posX);
     maxX = Math.max(maxX, n.posX);
@@ -588,7 +593,11 @@ function MiniTreeSvg({
   const vbH = maxY - minY + pad * 2;
 
   return (
-    <svg viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`} className="h-full w-full" preserveAspectRatio="xMidYMid meet">
+    <svg
+      viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
+      className="h-full w-full"
+      preserveAspectRatio="xMidYMid meet"
+    >
       {nodes.map((node) =>
         node.next
           .filter((tid) => sectionIds.has(tid))
@@ -599,14 +608,16 @@ function MiniTreeSvg({
             return (
               <line
                 key={`${node.id}-${tid}`}
-                x1={node.posX} y1={node.posY}
-                x2={target.posX} y2={target.posY}
+                x1={node.posX}
+                y1={node.posY}
+                x2={target.posX}
+                y2={target.posY}
                 stroke={active ? GOLD : 'rgba(255,255,255,0.08)'}
                 strokeWidth={active ? 40 : 24}
                 strokeLinecap="round"
               />
             );
-          }),
+          })
       )}
       {nodes.map((node) => {
         const selected = selections.has(node.id);
@@ -633,12 +644,7 @@ function MiniTreeSvg({
                 clipPath={`url(#mini-clip-${node.id})`}
               />
             ) : (
-              <circle
-                cx={node.posX}
-                cy={node.posY}
-                r={r}
-                fill="rgba(255,255,255,0.08)"
-              />
+              <circle cx={node.posX} cy={node.posY} r={r} fill="rgba(255,255,255,0.08)" />
             )}
             {selected && (
               <circle
