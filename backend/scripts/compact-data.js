@@ -55,6 +55,9 @@ const MANIFEST = {
 
   // Season config — our own file, keep as-is
   "season-config.json": null,
+
+  // Talent trees — keep as-is (keyed by specId)
+  "talents.json": null,
 };
 
 // ---------------------------------------------------------------------------
