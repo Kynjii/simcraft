@@ -199,26 +199,10 @@ function AdvancedOptions() {
       </button>
       {open && (
         <div className="animate-fade-in space-y-5 border-t border-border px-5 pb-5">
-          <div className="pt-4">
-            <label className="label-text">Fight Style</label>
-            <FightStyleSelector value={fightStyle} onChange={setFightStyle} />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4 pt-4">
             <div className="space-y-2">
-              <label className="label-text">Number of Bosses</label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  value={targetCount}
-                  onChange={(e) => setTargetCount(Number(e.target.value))}
-                  className="flex-1 accent-gold"
-                />
-                <span className="w-6 text-right font-mono text-sm tabular-nums text-white">
-                  {targetCount}
-                </span>
-              </div>
+              <label className="label-text">Fight Style</label>
+              <FightStyleSelector value={fightStyle} onChange={setFightStyle} />
             </div>
             <div className="space-y-2">
               <label className="label-text">Fight Length</label>
@@ -234,6 +218,22 @@ function AdvancedOptions() {
                 />
                 <span className="w-16 text-right font-mono text-sm tabular-nums text-white">
                   {Math.floor(fightLength / 60)}:{String(fightLength % 60).padStart(2, '0')}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="label-text">Number of Bosses</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={targetCount}
+                  onChange={(e) => setTargetCount(Number(e.target.value))}
+                  className="flex-1 accent-gold"
+                />
+                <span className="w-6 text-right font-mono text-sm tabular-nums text-white">
+                  {targetCount}
                 </span>
               </div>
             </div>
