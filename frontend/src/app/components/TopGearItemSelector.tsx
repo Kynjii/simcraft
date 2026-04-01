@@ -134,7 +134,8 @@ export default function TopGearItemSelector({
         if (!res.ok) return;
         const catalystItem: ResolvedItem = await res.json();
 
-        // Add to resolved data
+        // Add to resolved data (for display only — the backend re-generates
+        // catalyst items with is_catalyst: true during combo/sim resolve)
         const updatedSlots = { ...resolved.slots };
         const slotRes = updatedSlots[item.slot];
         if (slotRes) {
@@ -144,9 +145,6 @@ export default function TopGearItemSelector({
           };
         }
         onResolvedChange({ ...resolved, slots: updatedSlots });
-
-        // Notify parent so simc string gets appended on submit
-        onItemAdded(item.slot, catalystItem.simc_string, item.origin);
 
         // Auto-select the catalyst item
         const updated: Record<string, Set<string>> = {};
@@ -160,7 +158,7 @@ export default function TopGearItemSelector({
         // silently ignore
       }
     },
-    [resolved, onResolvedChange, onItemAdded, selectedUids, onSelectionChange]
+    [resolved, onResolvedChange, selectedUids, onSelectionChange]
   );
 
   const addUpgradedCopy = useCallback(
@@ -321,16 +319,6 @@ export default function TopGearItemSelector({
     return parts;
   }
 
-  if (visibleGroups.length === 0) {
-    return (
-      <div className="card p-8 text-center">
-        <p className="text-sm text-muted">
-          No alternative items found. Make sure your SimC addon exports bag items.
-        </p>
-      </div>
-    );
-  }
-
   // Collect vault and catalyst UIDs for quick-select
   const { vaultUids, catalystUids } = useMemo(() => {
     const vault: { uid: string; slot: string }[] = [];
@@ -343,6 +331,16 @@ export default function TopGearItemSelector({
     }
     return { vaultUids: vault, catalystUids: catalyst };
   }, [resolved]);
+
+  if (visibleGroups.length === 0) {
+    return (
+      <div className="card p-8 text-center">
+        <p className="text-sm text-muted">
+          No alternative items found. Make sure your SimC addon exports bag items.
+        </p>
+      </div>
+    );
+  }
 
   function toggleGroup(items: { uid: string; slot: string }[]) {
     const allSelected = items.length > 0 && items.every((c) => selectedUids[c.slot]?.has(c.uid));
