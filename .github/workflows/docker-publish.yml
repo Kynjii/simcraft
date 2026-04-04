@@ -88,6 +88,8 @@ jobs:
 
             docker run -d --name simhammer-demo --restart unless-stopped \
               -p 8000:8000 \
+              -e MAX_COMBINATIONS=2 \
+              -e MAX_SCENARIOS=0 \
               -v simhammer-data:/app/resources/data \
               -v simhammer-data-full:/app/resources/data_full \
               -v simhammer-simc:/app/resources/simc \
