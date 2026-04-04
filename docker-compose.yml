@@ -15,6 +15,8 @@ services:
       - DATA_DIR=/app/resources/data
       - DATABASE_URL=/app/db/simhammer.db
       - PORT=8000
+      - MAX_COMBINATIONS=2
+      - MAX_SCENARIOS=0
 
   frontend:
     build:

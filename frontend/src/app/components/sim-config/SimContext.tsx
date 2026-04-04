@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { FightScenario } from '../../lib/types';
+import { API_URL } from '../../lib/api';
 
 interface SimContextType {
   simcInput: string;
@@ -82,6 +83,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
       _setSimcInput(readSessionString('simhammer_simc_input', ''));
       _setThreads(readStored('simhammer_threads', 0));
     } catch {}
+
+    // Fetch server-enforced max combinations (web/demo only)
+    if (!window.electronAPI) {
+      fetch(`${API_URL}/api/config`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.max_combinations != null) {
+            _setMaxCombinations(data.max_combinations);
+          }
+        })
+        .catch(() => {});
+    }
   }, []);
 
   const addScenario = useCallback(() => {

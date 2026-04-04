@@ -50,9 +50,14 @@ impl SystemStats {
 }
 
 async fn get_config() -> HttpResponse {
-    HttpResponse::Ok().json(json!({
+    let max_combos = *storage::MAX_COMBINATIONS;
+    let mut config = json!({
         "max_scenarios": *storage::MAX_SCENARIOS,
-    }))
+    });
+    if max_combos > 0 {
+        config["max_combinations"] = json!(max_combos);
+    }
+    HttpResponse::Ok().json(config)
 }
 
 async fn health_check() -> HttpResponse {

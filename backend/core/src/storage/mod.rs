@@ -33,6 +33,17 @@ pub static MAX_SCENARIOS: Lazy<usize> = Lazy::new(|| {
     10
 });
 
+/// Maximum gear combinations for Top Gear / Upgrade Compare.
+/// Override with MAX_COMBINATIONS env var. Default: unlimited (0 = no limit).
+pub static MAX_COMBINATIONS: Lazy<usize> = Lazy::new(|| {
+    if let Ok(val) = std::env::var("MAX_COMBINATIONS") {
+        if let Ok(n) = val.parse() {
+            return n;
+        }
+    }
+    0
+});
+
 /// Trait for job persistence — implemented by in-memory store (desktop) and SQLite (web).
 pub trait JobStorage: Send + Sync {
     fn insert(&self, job: Job);

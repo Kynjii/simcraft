@@ -159,12 +159,20 @@ pub(super) async fn create_top_gear_sim(
         })
         .collect();
 
+    // Enforce server-side max combinations cap
+    let server_max = *crate::storage::MAX_COMBINATIONS;
+    let max_combinations = match (req.max_combinations, server_max) {
+        (Some(client), s) if s > 0 => Some(client.min(s)),
+        (None, s) if s > 0 => Some(s),
+        (client, _) => client,
+    };
+
     let (generated_input, combo_count, combo_metadata) =
         match profileset_generator::generate_top_gear_input_with_talents(
             &base_profile,
             &items_by_slot,
             &req.selected_items,
-            req.max_combinations,
+            max_combinations,
             &talent_builds,
             catalyst_charges,
         ) {
@@ -283,11 +291,18 @@ pub(super) async fn get_top_gear_combo_count(req: web::Json<TopGearRequest>) -> 
         })
         .collect();
 
+    let server_max = *crate::storage::MAX_COMBINATIONS;
+    let max_combinations = match (req.max_combinations, server_max) {
+        (Some(client), s) if s > 0 => Some(client.min(s)),
+        (None, s) if s > 0 => Some(s),
+        (client, _) => client,
+    };
+
     match profileset_generator::generate_top_gear_input_with_talents(
         &base_profile,
         &items_by_slot,
         &req.selected_items,
-        req.max_combinations,
+        max_combinations,
         &talent_builds,
         catalyst_charges,
     ) {
