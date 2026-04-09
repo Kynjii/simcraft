@@ -43,6 +43,14 @@ pub struct DifficultyDef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DifficultyGroup {
+    pub label: String,
+    #[serde(default)]
+    pub difficulties: Vec<DifficultyDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DungeonCategory {
     pub key: String,
     pub label: String,
@@ -51,6 +59,8 @@ pub struct DungeonCategory {
     pub default_difficulty: String,
     #[serde(default)]
     pub difficulties: Vec<DifficultyDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty_groups: Option<Vec<DifficultyGroup>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

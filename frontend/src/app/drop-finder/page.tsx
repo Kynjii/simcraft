@@ -6,7 +6,7 @@ import { useSimContext } from '../components/sim-config/SimContext';
 import ToggleButtonGroup from '../components/ui/ToggleButtonGroup';
 import { API_URL } from '../lib/api';
 import { useSimSubmit } from '../lib/useSimSubmit';
-import type { SeasonConfigResponse, DifficultyDef, DungeonCategory } from '../lib/types';
+import type { SeasonConfigResponse, DifficultyDef, DifficultyGroup, DungeonCategory } from '../lib/types';
 import CategorySelector from '../components/loot/CategorySelector';
 import DropSlotList from '../components/loot/DropSlotList';
 import DungeonGrid from '../components/loot/DungeonGrid';
@@ -244,6 +244,7 @@ export default function DropFinderPage() {
   const activeDungeonCat = dungeonCats.find((dc) => dc.cat.key === category);
   const isDungeon = !!activeDungeonCat;
   const isCrafted = activeDungeonCat?.cat.key === 'crafted';
+  const isPoolOnly = isDungeon && (activeDungeonCat?.instances.length ?? 0) === 0;
   const selectedInstance =
     selectedId && !selectedId.startsWith('type:')
       ? instances.find((i) => String(i.id) === selectedId)
@@ -265,9 +266,19 @@ export default function DropFinderPage() {
   const activeDifficulties: DifficultyDef[] = useMemo(() => {
     if (!seasonConfig) return [];
     if (isRaid) return seasonConfig.raid_difficulties;
-    if (activeDungeonCat) return activeDungeonCat.cat.difficulties;
+    if (activeDungeonCat) {
+      if (activeDungeonCat.cat.difficultyGroups) {
+        return activeDungeonCat.cat.difficultyGroups.flatMap((g) => g.difficulties);
+      }
+      return activeDungeonCat.cat.difficulties;
+    }
     return [];
   }, [seasonConfig, isRaid, activeDungeonCat]);
+
+  const activeDifficultyGroups: DifficultyGroup[] | null = useMemo(() => {
+    if (activeDungeonCat?.cat.difficultyGroups) return activeDungeonCat.cat.difficultyGroups;
+    return null;
+  }, [activeDungeonCat]);
 
   const dungeonInstances = useMemo(
     () => activeDungeonCat?.instances ?? [],
@@ -362,11 +373,17 @@ export default function DropFinderPage() {
           category={category}
           onChange={(key) => {
             setCategory(key);
-            // Auto-select pool for crafted (no instance picker needed)
+            // Auto-select pool for categories with no sub-instances (crafted, delves, prey)
             const dc = dungeonCats.find((d) => d.cat.key === key);
-            if (dc?.cat.key === 'crafted') {
+            if (dc && dc.instances.length === 0) {
               setSelectedId(String(dc.cat.poolInstanceId));
               setDungeonDiff(dc.cat.defaultDifficulty);
+              // Set upgrade level to match the default difficulty's track level
+              const allDiffs = dc.cat.difficultyGroups
+                ? dc.cat.difficultyGroups.flatMap((g) => g.difficulties)
+                : dc.cat.difficulties;
+              const defaultDiff = allDiffs.find((d) => d.key === dc.cat.defaultDifficulty);
+              setUpgradeLevel(defaultDiff?.level ?? 0);
             } else {
               setSelectedId('');
             }
@@ -374,7 +391,7 @@ export default function DropFinderPage() {
           dungeonCats={dungeonCats}
         />
 
-      {category && !isCrafted && hasImages ? (
+      {category && !isPoolOnly && hasImages ? (
         <DungeonGrid
           value={selectedId}
           onChange={setSelectedId}
@@ -382,7 +399,7 @@ export default function DropFinderPage() {
           allKey={allKey}
           allLabel={isRaid ? t('loot.allRaids') : t('loot.allDungeons')}
         />
-      ) : category && !isCrafted ? (
+      ) : category && !isPoolOnly ? (
         <div className="card p-5">
           <label className="label-text">{isRaid ? t('dropFinder.selectRaid') : t('dropFinder.selectDungeon')}</label>
           <ToggleButtonGroup
@@ -395,56 +412,110 @@ export default function DropFinderPage() {
 
       {(isRaid || isDungeon) && selectedId && activeDifficulties.length > 0 && (
         <div className="card space-y-4 p-5">
-          <div>
-            <label className="label-text">{t('dropFinder.difficulty')}</label>
-            <div className="flex flex-wrap gap-1.5">
-              {activeDifficulties.map((d) => {
-                const currentDiff = isRaid ? difficulty : dungeonDiff;
-                const isActive = currentDiff === d.key;
-                const trackLevels = d.track ? upgradeTracks[d.track] : null;
-                const max = trackLevels?.at(-1)?.max_level ?? d.level;
-                const ilvl = trackLevels?.find((t) => t.level === d.level)?.ilvl ?? d.fixedIlvl;
-                const tc = d.track ? TRACK_COLORS[d.track] : null;
-                return (
-                  <button
-                    key={d.key}
-                    onClick={() => {
-                      if (isRaid) setDifficulty(d.key);
-                      else setDungeonDiff(d.key);
-                      setUpgradeLevel(0);
-                    }}
-                    className={`flex min-w-[4.5rem] flex-col items-center rounded-lg border px-3 py-2 text-center transition-all duration-150 ${
-                      isActive && tc
-                        ? `${tc.border} ${tc.bg}`
-                        : isActive
-                          ? 'border-gold/40 bg-gold/[0.08]'
-                          : 'border-transparent bg-surface-container-high hover:bg-surface-container-highest'
-                    }`}
-                  >
-                    <span
-                      className={`text-lg font-black leading-none ${isActive && tc ? tc.text : isActive ? 'text-gold' : 'text-on-surface'}`}
+          {activeDifficultyGroups ? (
+            activeDifficultyGroups.map((group) => (
+              <div key={group.label}>
+                <label className="label-text">{group.label}</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.difficulties.map((d) => {
+                    const currentDiff = dungeonDiff;
+                    const isActive = currentDiff === d.key;
+                    const trackLevels = d.track ? upgradeTracks[d.track] : null;
+                    const max = trackLevels?.at(-1)?.max_level ?? d.level;
+                    const ilvl = trackLevels?.find((t) => t.level === d.level)?.ilvl ?? d.fixedIlvl;
+                    const tc = d.track ? TRACK_COLORS[d.track] : null;
+                    return (
+                      <button
+                        key={d.key}
+                        onClick={() => {
+                          setDungeonDiff(d.key);
+                          setUpgradeLevel(d.level ?? 0);
+                        }}
+                        className={`flex min-w-[4.5rem] flex-col items-center rounded-lg border px-3 py-2 text-center transition-all duration-150 ${
+                          isActive && tc
+                            ? `${tc.border} ${tc.bg}`
+                            : isActive
+                              ? 'border-gold/40 bg-gold/[0.08]'
+                              : 'border-transparent bg-surface-container-high hover:bg-surface-container-highest'
+                        }`}
+                      >
+                        <span
+                          className={`text-lg font-black leading-none ${isActive && tc ? tc.text : isActive ? 'text-gold' : 'text-on-surface'}`}
+                        >
+                          {d.label}
+                        </span>
+                        {ilvl && (
+                          <span
+                            className={`mt-1 font-mono text-[13px] font-medium tabular-nums ${isActive ? 'text-on-surface-variant' : 'text-on-surface-variant/60'}`}
+                          >
+                            ilvl {ilvl}
+                          </span>
+                        )}
+                        {d.track && (
+                          <span
+                            className={`mt-0.5 text-[12px] font-semibold ${tc?.text ?? 'text-on-surface-variant'} ${isActive ? 'opacity-100' : 'opacity-60'}`}
+                          >
+                            {TRACK_SHORT[d.track] ?? d.track} {d.level}/{max}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div>
+              <label className="label-text">{t('dropFinder.difficulty')}</label>
+              <div className="flex flex-wrap gap-1.5">
+                {activeDifficulties.map((d) => {
+                  const currentDiff = isRaid ? difficulty : dungeonDiff;
+                  const isActive = currentDiff === d.key;
+                  const trackLevels = d.track ? upgradeTracks[d.track] : null;
+                  const max = trackLevels?.at(-1)?.max_level ?? d.level;
+                  const ilvl = trackLevels?.find((t) => t.level === d.level)?.ilvl ?? d.fixedIlvl;
+                  const tc = d.track ? TRACK_COLORS[d.track] : null;
+                  return (
+                    <button
+                      key={d.key}
+                      onClick={() => {
+                        if (isRaid) setDifficulty(d.key);
+                        else setDungeonDiff(d.key);
+                        setUpgradeLevel(0);
+                      }}
+                      className={`flex min-w-[4.5rem] flex-col items-center rounded-lg border px-3 py-2 text-center transition-all duration-150 ${
+                        isActive && tc
+                          ? `${tc.border} ${tc.bg}`
+                          : isActive
+                            ? 'border-gold/40 bg-gold/[0.08]'
+                            : 'border-transparent bg-surface-container-high hover:bg-surface-container-highest'
+                      }`}
                     >
-                      {d.label}
-                    </span>
-                    {ilvl && (
                       <span
-                        className={`mt-1 font-mono text-[13px] font-medium tabular-nums ${isActive ? 'text-on-surface-variant' : 'text-on-surface-variant/60'}`}
+                        className={`text-lg font-black leading-none ${isActive && tc ? tc.text : isActive ? 'text-gold' : 'text-on-surface'}`}
                       >
-                        ilvl {ilvl}
+                        {d.label}
                       </span>
-                    )}
-                    {d.track && !isCrafted ? (
-                      <span
-                        className={`mt-0.5 text-[12px] font-semibold ${tc?.text ?? 'text-on-surface-variant'} ${isActive ? 'opacity-100' : 'opacity-60'}`}
-                      >
-                        {TRACK_SHORT[d.track] ?? d.track} {d.level}/{max}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
+                      {ilvl && (
+                        <span
+                          className={`mt-1 font-mono text-[13px] font-medium tabular-nums ${isActive ? 'text-on-surface-variant' : 'text-on-surface-variant/60'}`}
+                        >
+                          ilvl {ilvl}
+                        </span>
+                      )}
+                      {d.track && !isCrafted ? (
+                        <span
+                          className={`mt-0.5 text-[12px] font-semibold ${tc?.text ?? 'text-on-surface-variant'} ${isActive ? 'opacity-100' : 'opacity-60'}`}
+                        >
+                          {TRACK_SHORT[d.track] ?? d.track} {d.level}/{max}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {currentTrackInfo && drops && (
             <div>

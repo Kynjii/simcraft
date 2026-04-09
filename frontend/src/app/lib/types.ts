@@ -74,12 +74,18 @@ export interface DifficultyDef {
   fixedQuality?: number;
 }
 
+export interface DifficultyGroup {
+  label: string;
+  difficulties: DifficultyDef[];
+}
+
 export interface DungeonCategory {
   key: string;
   label: string;
   poolInstanceId: number;
   defaultDifficulty: string;
   difficulties: DifficultyDef[];
+  difficultyGroups?: DifficultyGroup[];
 }
 
 export interface SeasonConfigResponse {

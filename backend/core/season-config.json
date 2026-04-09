@@ -1,13 +1,31 @@
 {
-  "season": "Midnight Season 2",
-
+  "season": "Midnight Season 1",
   "raidDifficulties": [
-    { "key": "lfr",    "label": "Raid Finder", "track": "Veteran",  "sortOrder": 1 },
-    { "key": "normal", "label": "Normal",      "track": "Champion", "sortOrder": 2 },
-    { "key": "heroic", "label": "Heroic",      "track": "Hero",     "sortOrder": 3 },
-    { "key": "mythic", "label": "Mythic",      "track": "Myth",     "sortOrder": 4 }
+    {
+      "key": "lfr",
+      "label": "Raid Finder",
+      "track": "Veteran",
+      "sortOrder": 1
+    },
+    {
+      "key": "normal",
+      "label": "Normal",
+      "track": "Champion",
+      "sortOrder": 2
+    },
+    {
+      "key": "heroic",
+      "label": "Heroic",
+      "track": "Hero",
+      "sortOrder": 3
+    },
+    {
+      "key": "mythic",
+      "label": "Mythic",
+      "track": "Myth",
+      "sortOrder": 4
+    }
   ],
-
   "dungeonCategories": [
     {
       "key": "mplus",
@@ -15,19 +33,97 @@
       "poolInstanceId": -1,
       "defaultDifficulty": "mythic+10",
       "difficulties": [
-        { "key": "heroic",    "label": "Heroic",    "track": "Adventurer", "level": 2, "sortOrder": 1 },
-        { "key": "mythic",    "label": "Mythic 0",  "track": "Champion",   "level": 1, "sortOrder": 2 },
-        { "key": "mythic+2",  "label": "+2",        "track": "Champion",   "level": 2, "sortOrder": 3 },
-        { "key": "mythic+3",  "label": "+3",        "track": "Champion",   "level": 2, "sortOrder": 4 },
-        { "key": "mythic+4",  "label": "+4",        "track": "Champion",   "level": 3, "sortOrder": 5 },
-        { "key": "mythic+5",  "label": "+5",        "track": "Champion",   "level": 4, "sortOrder": 6 },
-        { "key": "mythic+6",  "label": "+6",        "track": "Champion",   "level": 5, "sortOrder": 7 },
-        { "key": "mythic+7",  "label": "+7",        "track": "Hero",       "level": 1, "sortOrder": 8 },
-        { "key": "mythic+8",  "label": "+8",        "track": "Hero",       "level": 2, "sortOrder": 9 },
-        { "key": "mythic+9",  "label": "+9",        "track": "Hero",       "level": 2, "sortOrder": 10 },
-        { "key": "mythic+10", "label": "+10",        "track": "Hero",       "level": 3, "sortOrder": 11 },
-        { "key": "vault+7-9", "label": "Vault +7-9",  "track": "Hero",       "level": 4, "sortOrder": 12 },
-        { "key": "vault+10",  "label": "Vault +10",   "track": "Myth",       "level": 1, "sortOrder": 13 }
+        {
+          "key": "heroic",
+          "label": "Heroic",
+          "track": "Adventurer",
+          "level": 2,
+          "sortOrder": 1
+        },
+        {
+          "key": "mythic",
+          "label": "Mythic 0",
+          "track": "Champion",
+          "level": 1,
+          "sortOrder": 2
+        },
+        {
+          "key": "mythic+2",
+          "label": "+2",
+          "track": "Champion",
+          "level": 2,
+          "sortOrder": 3
+        },
+        {
+          "key": "mythic+3",
+          "label": "+3",
+          "track": "Champion",
+          "level": 2,
+          "sortOrder": 4
+        },
+        {
+          "key": "mythic+4",
+          "label": "+4",
+          "track": "Champion",
+          "level": 3,
+          "sortOrder": 5
+        },
+        {
+          "key": "mythic+5",
+          "label": "+5",
+          "track": "Champion",
+          "level": 4,
+          "sortOrder": 6
+        },
+        {
+          "key": "mythic+6",
+          "label": "+6",
+          "track": "Champion",
+          "level": 5,
+          "sortOrder": 7
+        },
+        {
+          "key": "mythic+7",
+          "label": "+7",
+          "track": "Hero",
+          "level": 1,
+          "sortOrder": 8
+        },
+        {
+          "key": "mythic+8",
+          "label": "+8",
+          "track": "Hero",
+          "level": 2,
+          "sortOrder": 9
+        },
+        {
+          "key": "mythic+9",
+          "label": "+9",
+          "track": "Hero",
+          "level": 2,
+          "sortOrder": 10
+        },
+        {
+          "key": "mythic+10",
+          "label": "+10",
+          "track": "Hero",
+          "level": 3,
+          "sortOrder": 11
+        },
+        {
+          "key": "vault+10-13",
+          "label": "Vault +10-13",
+          "track": "Myth",
+          "level": 1,
+          "sortOrder": 12
+        },
+        {
+          "key": "vault+7-9",
+          "label": "Vault +7-9",
+          "track": "Hero",
+          "level": 4,
+          "sortOrder": 13
+        }
       ]
     },
     {
@@ -36,9 +132,29 @@
       "poolInstanceId": -32,
       "defaultDifficulty": "heroic",
       "difficulties": [
-        { "key": "normal",  "label": "Normal",  "track": null, "level": 0, "sortOrder": 1, "fixedIlvl": 214, "fixedQuality": 3 },
-        { "key": "heroic",  "label": "Heroic",  "track": "Adventurer", "level": 2, "sortOrder": 2 },
-        { "key": "mythic",  "label": "Mythic",  "track": "Champion",   "level": 1, "sortOrder": 3 }
+        {
+          "key": "normal",
+          "label": "Normal",
+          "track": null,
+          "level": 0,
+          "sortOrder": 1,
+          "fixedIlvl": 214,
+          "fixedQuality": 3
+        },
+        {
+          "key": "heroic",
+          "label": "Heroic",
+          "track": "Adventurer",
+          "level": 2,
+          "sortOrder": 2
+        },
+        {
+          "key": "mythic",
+          "label": "Mythic",
+          "track": "Champion",
+          "level": 1,
+          "sortOrder": 3
+        }
       ]
     },
     {
@@ -47,27 +163,153 @@
       "poolInstanceId": -88,
       "defaultDifficulty": "crafted-champion",
       "difficulties": [
-        { "key": "crafted-champion", "label": "Base",            "track": "Champion", "level": 5, "sortOrder": 1 },
-        { "key": "crafted-hero",     "label": "Hero Dawncrest",   "track": "Hero",     "level": 5, "sortOrder": 2 },
-        { "key": "crafted-myth",     "label": "Myth Dawncrest",   "track": "Myth",     "level": 5, "sortOrder": 3 }
+        {
+          "key": "crafted-champion",
+          "label": "Base",
+          "track": "Champion",
+          "level": 5,
+          "sortOrder": 1
+        },
+        {
+          "key": "crafted-hero",
+          "label": "Hero Dawncrest",
+          "track": "Hero",
+          "level": 5,
+          "sortOrder": 2
+        },
+        {
+          "key": "crafted-myth",
+          "label": "Myth Dawncrest",
+          "track": "Myth",
+          "level": 5,
+          "sortOrder": 3
+        }
+      ]
+    },
+    {
+      "key": "delves",
+      "label": "Delves",
+      "poolInstanceId": -92,
+      "defaultDifficulty": "delve-bountiful-8",
+      "difficultyGroups": [
+        {
+          "label": "Bountiful",
+          "difficulties": [
+            { "key": "delve-bountiful-1", "label": "1", "track": "Adventurer", "level": 1, "sortOrder": 1 },
+            { "key": "delve-bountiful-2", "label": "2", "track": "Adventurer", "level": 2, "sortOrder": 2 },
+            { "key": "delve-bountiful-3", "label": "3", "track": "Adventurer", "level": 3, "sortOrder": 3 },
+            { "key": "delve-bountiful-4", "label": "4", "track": "Adventurer", "level": 4, "sortOrder": 4 },
+            { "key": "delve-bountiful-5", "label": "5", "track": "Veteran", "level": 1, "sortOrder": 5 },
+            { "key": "delve-bountiful-6", "label": "6", "track": "Veteran", "level": 2, "sortOrder": 6 },
+            { "key": "delve-bountiful-7", "label": "7", "track": "Champion", "level": 1, "sortOrder": 7 },
+            { "key": "delve-bountiful-8", "label": "8+", "track": "Champion", "level": 2, "sortOrder": 8 }
+          ]
+        },
+        {
+          "label": "Trovehunter",
+          "difficulties": [
+            { "key": "delve-trovehunter-4", "label": "4", "track": "Veteran", "level": 2, "sortOrder": 1 },
+            { "key": "delve-trovehunter-5", "label": "5", "track": "Veteran", "level": 4, "sortOrder": 2 },
+            { "key": "delve-trovehunter-6", "label": "6", "track": "Champion", "level": 1, "sortOrder": 3 },
+            { "key": "delve-trovehunter-7", "label": "7", "track": "Champion", "level": 2, "sortOrder": 4 },
+            { "key": "delve-trovehunter-8", "label": "8+", "track": "Hero", "level": 1, "sortOrder": 5 }
+          ]
+        },
+        {
+          "label": "Vault",
+          "difficulties": [
+            { "key": "delve-vault-1", "label": "1", "track": "Veteran", "level": 1, "sortOrder": 1 },
+            { "key": "delve-vault-2", "label": "2", "track": "Veteran", "level": 2, "sortOrder": 2 },
+            { "key": "delve-vault-3", "label": "3", "track": "Veteran", "level": 3, "sortOrder": 3 },
+            { "key": "delve-vault-4", "label": "4", "track": "Veteran", "level": 4, "sortOrder": 4 },
+            { "key": "delve-vault-5", "label": "5", "track": "Champion", "level": 1, "sortOrder": 5 },
+            { "key": "delve-vault-6", "label": "6", "track": "Champion", "level": 3, "sortOrder": 6 },
+            { "key": "delve-vault-7", "label": "7", "track": "Champion", "level": 4, "sortOrder": 7 },
+            { "key": "delve-vault-8", "label": "8+", "track": "Hero", "level": 1, "sortOrder": 8 }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "prey",
+      "label": "Prey",
+      "poolInstanceId": -93,
+      "defaultDifficulty": "prey-nightmare",
+      "difficultyGroups": [
+        {
+          "label": "Prey",
+          "difficulties": [
+            { "key": "prey-normal", "label": "Normal", "track": "Adventurer", "level": 1, "sortOrder": 1 },
+            { "key": "prey-hard", "label": "Hard", "track": "Veteran", "level": 1, "sortOrder": 2 },
+            { "key": "prey-nightmare", "label": "Nightmare", "track": "Champion", "level": 1, "sortOrder": 3 }
+          ]
+        },
+        {
+          "label": "Vault",
+          "difficulties": [
+            { "key": "prey-vault-normal", "label": "Normal", "track": "Veteran", "level": 1, "sortOrder": 1 },
+            { "key": "prey-vault-hard", "label": "Hard", "track": "Champion", "level": 1, "sortOrder": 2 },
+            { "key": "prey-vault-nightmare", "label": "Nightmare", "track": "Hero", "level": 1, "sortOrder": 3 }
+          ]
+        }
       ]
     }
   ],
-
   "encounterOverrides": [
-    { "encounterId": 2733, "upgradeLevel": 1 },
-    { "encounterId": 2734, "upgradeLevel": 2 },
-    { "encounterId": 2736, "upgradeLevel": 2 },
-    { "encounterId": 2735, "upgradeLevel": 3 },
-    { "encounterId": 2737, "upgradeLevel": 3 },
-    { "encounterId": 2738, "upgradeLevel": 4 },
-    { "encounterId": 2795, "upgradeLevel": 2 },
-    { "encounterId": 2739, "upgradeLevel": 3 },
-    { "encounterId": 2740, "upgradeLevel": 4 }
+    {
+      "encounterId": 2733,
+      "upgradeLevel": 1
+    },
+    {
+      "encounterId": 2734,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2735,
+      "upgradeLevel": 3
+    },
+    {
+      "encounterId": 2736,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2737,
+      "upgradeLevel": 3
+    },
+    {
+      "encounterId": 2738,
+      "upgradeLevel": 4
+    },
+    {
+      "encounterId": 2739,
+      "upgradeLevel": 3
+    },
+    {
+      "encounterId": 2740,
+      "upgradeLevel": 4
+    },
+    {
+      "encounterId": 2782,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2795,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2827,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2828,
+      "upgradeLevel": 2
+    },
+    {
+      "encounterId": 2829,
+      "upgradeLevel": 2
+    }
   ],
-
   "instanceOverrides": [],
-
   "raidDifficultyTracks": {
     "lfr": "Veteran",
     "normal": "Champion",
@@ -75,26 +317,115 @@
     "mythic": "Myth"
   },
   "encounterUpgradeLevel": {
-    "2733": 1, "2734": 2, "2736": 2, "2735": 3,
-    "2737": 3, "2738": 4, "2795": 2, "2739": 3, "2740": 4
+    "2739": 3,
+    "2740": 4,
+    "2827": 2,
+    "2829": 2,
+    "2828": 2,
+    "2782": 2,
+    "2795": 2,
+    "2733": 1,
+    "2734": 2,
+    "2736": 2,
+    "2735": 3,
+    "2737": 3,
+    "2738": 4
   },
-  "dungeonNormal": { "ilvl": 214, "quality": 3 },
+  "dungeonNormal": {
+    "ilvl": 214,
+    "quality": 3
+  },
   "dungeonDifficultyTracks": {
-    "heroic":    { "track": "Adventurer", "level": 2 },
-    "mythic":    { "track": "Champion",   "level": 1 },
-    "mythic+2":  { "track": "Champion",   "level": 2 },
-    "mythic+3":  { "track": "Champion",   "level": 2 },
-    "mythic+4":  { "track": "Champion",   "level": 3 },
-    "mythic+5":  { "track": "Champion",   "level": 4 },
-    "mythic+6":  { "track": "Champion",   "level": 5 },
-    "mythic+7":  { "track": "Hero",       "level": 1 },
-    "mythic+8":  { "track": "Hero",       "level": 2 },
-    "mythic+9":  { "track": "Hero",       "level": 2 },
-    "mythic+10": { "track": "Hero",       "level": 3 },
-    "vault+7-9": { "track": "Hero",       "level": 4 },
-    "vault+10":         { "track": "Myth",       "level": 1 },
-    "crafted-champion": { "track": "Champion",   "level": 5 },
-    "crafted-hero":     { "track": "Hero",       "level": 5 },
-    "crafted-myth":     { "track": "Myth",       "level": 5 }
+    "heroic": {
+      "track": "Adventurer",
+      "level": 2
+    },
+    "mythic": {
+      "track": "Champion",
+      "level": 1
+    },
+    "mythic+2": {
+      "track": "Champion",
+      "level": 2
+    },
+    "mythic+3": {
+      "track": "Champion",
+      "level": 2
+    },
+    "mythic+4": {
+      "track": "Champion",
+      "level": 3
+    },
+    "mythic+5": {
+      "track": "Champion",
+      "level": 4
+    },
+    "mythic+6": {
+      "track": "Champion",
+      "level": 5
+    },
+    "mythic+7": {
+      "track": "Hero",
+      "level": 1
+    },
+    "mythic+8": {
+      "track": "Hero",
+      "level": 2
+    },
+    "mythic+9": {
+      "track": "Hero",
+      "level": 2
+    },
+    "mythic+10": {
+      "track": "Hero",
+      "level": 3
+    },
+    "vault+7-9": {
+      "track": "Hero",
+      "level": 4
+    },
+    "vault+10-13": {
+      "track": "Myth",
+      "level": 1
+    },
+    "crafted-champion": {
+      "track": "Champion",
+      "level": 5
+    },
+    "crafted-hero": {
+      "track": "Hero",
+      "level": 5
+    },
+    "crafted-myth": {
+      "track": "Myth",
+      "level": 5
+    },
+    "delve-bountiful-1": { "track": "Adventurer", "level": 1 },
+    "delve-bountiful-2": { "track": "Adventurer", "level": 2 },
+    "delve-bountiful-3": { "track": "Adventurer", "level": 3 },
+    "delve-bountiful-4": { "track": "Adventurer", "level": 4 },
+    "delve-bountiful-5": { "track": "Veteran", "level": 1 },
+    "delve-bountiful-6": { "track": "Veteran", "level": 2 },
+    "delve-bountiful-7": { "track": "Champion", "level": 1 },
+    "delve-bountiful-8": { "track": "Champion", "level": 2 },
+    "delve-trovehunter-4": { "track": "Veteran", "level": 2 },
+    "delve-trovehunter-5": { "track": "Veteran", "level": 4 },
+    "delve-trovehunter-6": { "track": "Champion", "level": 1 },
+    "delve-trovehunter-7": { "track": "Champion", "level": 2 },
+    "delve-trovehunter-8": { "track": "Hero", "level": 1 },
+    "delve-vault-1": { "track": "Veteran", "level": 1 },
+    "delve-vault-2": { "track": "Veteran", "level": 2 },
+    "delve-vault-3": { "track": "Veteran", "level": 3 },
+    "delve-vault-4": { "track": "Veteran", "level": 4 },
+    "delve-vault-5": { "track": "Champion", "level": 1 },
+    "delve-vault-6": { "track": "Champion", "level": 3 },
+    "delve-vault-7": { "track": "Champion", "level": 4 },
+    "delve-vault-8": { "track": "Hero", "level": 1 },
+    "prey-normal": { "track": "Adventurer", "level": 1 },
+    "prey-hard": { "track": "Veteran", "level": 1 },
+    "prey-nightmare": { "track": "Champion", "level": 1 },
+    "prey-vault-normal": { "track": "Veteran", "level": 1 },
+    "prey-vault-hard": { "track": "Champion", "level": 1 },
+    "prey-vault-nightmare": { "track": "Hero", "level": 1 }
   }
 }
