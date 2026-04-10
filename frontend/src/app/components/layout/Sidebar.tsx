@@ -6,6 +6,7 @@ import { useState } from 'react';
 import SettingsPopover from '../sim-config/SettingsPopover';
 import SidebarRoutes from './SidebarRoutes';
 import LanguageSelector from './LanguageSelector';
+import { ScaleSelector } from './ContentScaler';
 import { useIsDesktop } from '../../lib/useIsDesktop';
 import { useLanguage } from '../../lib/i18n';
 
@@ -115,6 +116,9 @@ export default function Sidebar() {
       <div className="mt-auto shrink-0 border-t border-outline-variant/20">
         <div className="px-4 py-3">
           <LanguageSelector />
+        </div>
+        <div className="px-5 py-2 border-t border-outline-variant/20">
+          <ScaleSelector />
         </div>
         <div className="px-4 py-3 space-y-1 border-t border-outline-variant/20">
           <a

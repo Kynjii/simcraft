@@ -6,6 +6,7 @@ import FooterDisclaimer from './components/layout/FooterDisclaimer';
 import { SimProvider } from './components/sim-config/SimContext';
 import { LanguageProvider } from './lib/i18n';
 import UpdateChecker from './components/layout/UpdateChecker';
+import ContentScaler, { ScaleProvider } from './components/layout/ContentScaler';
 import './globals.css';
 import packageJson from '../../package.json';
 
@@ -32,16 +33,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen">
         <UpdateChecker />
         <LanguageProvider>
-          <SimProvider>
-            <Sidebar />
-            <div className="pl-64">
-              <TopBar />
-              <main className="mx-auto max-w-screen-2xl px-8 py-8">
-                {children}
-              </main>
-              <FooterDisclaimer version={packageJson.version} />
-            </div>
-          </SimProvider>
+          <ScaleProvider>
+            <SimProvider>
+              <Sidebar />
+              <div className="pl-64">
+                <TopBar />
+                <ContentScaler>
+                  {children}
+                </ContentScaler>
+                <FooterDisclaimer version={packageJson.version} />
+              </div>
+            </SimProvider>
+          </ScaleProvider>
         </LanguageProvider>
       </body>
     </html>
