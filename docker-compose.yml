@@ -22,7 +22,7 @@ services:
     build:
       context: frontend
       args:
-        - NEXT_PUBLIC_API_URL=https://${SERVER_IP:-localhost}
+        - NEXT_PUBLIC_API_URL=${SERVER_IP:-http://localhost:8000}
     ports:
       - "3000:3000"
 
