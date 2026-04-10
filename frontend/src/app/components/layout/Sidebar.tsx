@@ -37,14 +37,14 @@ export default function Sidebar() {
       ],
     },
     {
-      href: '/history',
-      label: t('nav.history'),
-      matchPaths: ['/history'],
-    },
-    {
       href: '/advanced',
       label: t('nav.advanced'),
       matchPaths: ['/advanced'],
+    },
+    {
+      href: '/history',
+      label: t('nav.history'),
+      matchPaths: ['/history'],
     },
   ];
 

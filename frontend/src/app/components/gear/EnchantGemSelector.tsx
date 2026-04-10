@@ -251,9 +251,14 @@ export default function EnchantGemSelector({
     <div className="space-y-4">
       {/* Header with toggles */}
       <div className="sticky top-14 z-30 -mx-8 flex items-center justify-between border-b border-outline-variant/20 bg-background/90 px-8 py-2 backdrop-blur-sm">
-        <p className="text-xs font-medium uppercase tracking-widest text-muted">
-          {t('enchantGem.selectGems')}
-        </p>
+        <div className="flex flex-col">
+          <p className="text-xs font-medium uppercase tracking-widest text-muted">
+            {t('enchantGem.selectGems')}
+          </p>
+          <p className="text-[11px] text-on-surface-variant/50 leading-snug normal-case tracking-normal">
+            {t('enchantGem.selectGemsTooltip')}
+          </p>
+        </div>
         <div className="flex items-center gap-3">
           {hasAnyGemSelected && (
             <div
@@ -263,9 +268,14 @@ export default function EnchantGemSelector({
               <div className={`w-8 h-[18px] rounded-full relative transition-colors shrink-0 ${replaceGems ? 'bg-gold' : 'bg-surface-container-highest'}`}>
                 <div className={`w-3 h-3 rounded-full absolute top-[3px] transition-all ${replaceGems ? 'right-[3px] bg-white' : 'left-[3px] bg-on-surface-variant'}`} />
               </div>
-              <span className="text-[11px] font-semibold text-on-surface-variant group-hover:text-gold transition-colors">
-                {t('enchantGem.replaceGems')}
-              </span>
+              <div className="flex flex-col">
+                <span className="text-[11px] font-semibold text-on-surface-variant group-hover:text-gold transition-colors leading-tight">
+                  {t('enchantGem.replaceGems')}
+                </span>
+                <span className="text-[10px] text-on-surface-variant/40 leading-snug">
+                  {t('enchantGem.replaceGemsTooltip')}
+                </span>
+              </div>
             </div>
           )}
           <button

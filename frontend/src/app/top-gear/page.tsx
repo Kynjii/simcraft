@@ -13,15 +13,33 @@ import type { ResolveGearResponse, ResolvedItem } from '../lib/types';
 import { useLanguage } from '../lib/i18n';
 import { storeTopGearState, getTopGearState, clearTopGearState } from '../lib/topgear-state';
 
+function InfoIcon({ tooltip }: { tooltip: string }) {
+  return (
+    <span
+      onClick={(e) => e.stopPropagation()}
+      className="relative inline-flex items-center justify-center w-4 h-4 rounded-full bg-on-surface-variant/10 text-on-surface-variant/50 hover:bg-on-surface-variant/20 hover:text-on-surface-variant cursor-help transition-colors shrink-0 group/tip"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-2.5 h-2.5">
+        <path fillRule="evenodd" d="M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0Zm-6 3.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM7.293 5.293a1 1 0 1 1 .99 1.667c-.15.09-.293.21-.293.443V8a.75.75 0 1 0 1.5 0v-.297a2.5 2.5 0 1 0-3.447-2.66.75.75 0 0 0 1.5 0 1 1 0 0 1-.25-.75Z" clipRule="evenodd" />
+      </svg>
+      <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-normal rounded-lg bg-surface-container-highest border border-outline-variant/20 px-3 py-2 text-xs font-normal normal-case tracking-normal text-on-surface shadow-xl opacity-0 transition-opacity group-hover/tip:opacity-100 w-56 text-center">
+        {tooltip}
+      </span>
+    </span>
+  );
+}
+
 function Toggle({
   checked,
   onChange,
   label,
+  tooltip,
   color = 'bg-primary',
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
+  tooltip?: string;
   color?: string;
 }) {
   return (
@@ -43,6 +61,7 @@ function Toggle({
       <span className="text-sm font-headline font-bold text-on-surface-variant group-hover:text-primary transition-colors">
         {label}
       </span>
+      {tooltip && <InfoIcon tooltip={tooltip} />}
     </div>
   );
 }
@@ -426,14 +445,14 @@ export default function TopGearPage() {
 
       {/* Top Gear toggles */}
       <div className="bg-surface-container-low rounded-xl border border-outline-variant/10 px-6 py-4 flex flex-wrap items-center gap-6">
-        <Toggle checked={copyEnchants} onChange={setCopyEnchants} label={t('topGear.copyEnchants')} />
+        <Toggle checked={copyEnchants} onChange={setCopyEnchants} label={t('topGear.copyEnchants')} tooltip={t('topGear.copyEnchantsTooltip')} />
         <span className="h-5 w-px bg-outline-variant/20" />
-        <Toggle checked={maxUpgrade} onChange={setMaxUpgrade} label={t('topGear.simHighestUpgrade')} />
+        <Toggle checked={maxUpgrade} onChange={setMaxUpgrade} label={t('topGear.simHighestUpgrade')} tooltip={t('topGear.simHighestUpgradeTooltip')} />
         {catalystCharges != null && catalystCharges > 0 && (
           <>
             <span className="h-5 w-px bg-outline-variant/20" />
             <div className="flex items-center gap-2.5">
-              <Toggle checked={catalyst} onChange={setCatalyst} label={t('topGear.revivalCatalyst')} color="bg-purple-500" />
+              <Toggle checked={catalyst} onChange={setCatalyst} label={t('topGear.revivalCatalyst')} tooltip={t('topGear.revivalCatalystTooltip')} color="bg-purple-500" />
               <div className="flex items-center gap-1.5 ml-1">
                 <input
                   type="number"
@@ -447,6 +466,7 @@ export default function TopGearPage() {
                   className="input-field !w-12 !px-1.5 !py-0.5 text-center !text-[13px]"
                 />
                 <span className="text-[11px] text-on-surface-variant/60">{t('topGear.charges')}</span>
+                <InfoIcon tooltip={t('topGear.chargesTooltip')} />
               </div>
             </div>
           </>
