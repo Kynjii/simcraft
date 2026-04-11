@@ -118,7 +118,8 @@ function compactItems(inputPath, outputPath) {
   const data = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 
   // Detect current expansion as the highest expansion number
-  const currentExp = Math.max(...data.map(i => i.expansion || 0));
+  let currentExp = 0;
+  for (const i of data) if ((i.expansion || 0) > currentExp) currentExp = i.expansion;
 
   const result = data.map(item => {
     const hasSources = item.sources && item.sources.length > 0;
@@ -278,14 +279,16 @@ function compactItemNames(inputPath, outputPath, inputDir) {
 
   if (fs.existsSync(itemsPath)) {
     const items = JSON.parse(fs.readFileSync(itemsPath, "utf8"));
-    const currentExp = Math.max(...items.map(i => i.expansion || 0));
+    let currentExp = 0;
+    for (const i of items) if ((i.expansion || 0) > currentExp) currentExp = i.expansion;
     for (const item of items) {
       if (item.id && (item.expansion || 0) === currentExp) validIds.add(String(item.id));
     }
   }
   if (fs.existsSync(encounterItemsPath)) {
     const items = JSON.parse(fs.readFileSync(encounterItemsPath, "utf8"));
-    const currentExp = Math.max(...items.map(i => i.expansion || 0));
+    let currentExp = 0;
+    for (const i of items) if ((i.expansion || 0) > currentExp) currentExp = i.expansion;
     for (const item of items) {
       if (item.id && (item.expansion || 0) === currentExp) validIds.add(String(item.id));
     }
