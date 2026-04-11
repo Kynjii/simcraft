@@ -6,6 +6,7 @@ import { useLanguage } from '../../lib/i18n';
 import FightStyleSelector from './FightStyleSelector';
 import ScenarioBuilder from './ScenarioBuilder';
 import ExpertToggle, { EXPERT_TABS, type ExpertTabKey } from './ExpertToggle';
+import RaidBuffsConsumables from './RaidBuffsConsumables';
 
 export default function AdvancedOptions() {
   const { t } = useLanguage();
@@ -18,6 +19,8 @@ export default function AdvancedOptions() {
     setTargetCount,
     fightLength,
     setFightLength,
+    targetError,
+    setTargetError,
     customApl,
     setCustomApl,
     simcHeader,
@@ -59,6 +62,7 @@ export default function AdvancedOptions() {
     fightStyle === 'Patchwerk' &&
     targetCount === 1 &&
     fightLength === 300 &&
+    targetError === 0.1 &&
     !customApl &&
     !hasExpertContent;
   const activeTabInfo = EXPERT_TABS.find((t) => t.key === activeTab)!;
@@ -104,7 +108,7 @@ export default function AdvancedOptions() {
       </button>
       {open && (
         <div className="animate-fade-in space-y-5 border-t border-outline-variant/10 px-5 pb-5">
-          <div className="grid grid-cols-3 gap-4 pt-4">
+          <div className="grid grid-cols-2 gap-4 pt-4">
             <div className="space-y-2">
               <label className="label-text">{t('config.fightStyle')}</label>
               <FightStyleSelector value={fightStyle} onChange={setFightStyle} />
@@ -115,15 +119,23 @@ export default function AdvancedOptions() {
                 <input
                   type="range"
                   min={30}
-                  max={600}
+                  max={1800}
                   step={30}
-                  value={fightLength}
+                  value={Math.min(fightLength, 1800)}
                   onChange={(e) => setFightLength(Number(e.target.value))}
                   className="flex-1 accent-gold"
                 />
-                <span className="w-16 text-right font-mono text-sm tabular-nums text-on-surface">
-                  {Math.floor(fightLength / 60)}:{String(fightLength % 60).padStart(2, '0')}
-                </span>
+                <input
+                  type="number"
+                  min={10}
+                  max={3600}
+                  value={fightLength}
+                  onChange={(e) => {
+                    const v = Math.max(10, Math.min(3600, Number(e.target.value) || 0));
+                    setFightLength(v);
+                  }}
+                  className="w-16 bg-transparent text-right font-mono text-sm tabular-nums text-on-surface focus:outline-none focus:ring-1 focus:ring-gold/30 rounded px-1 py-0.5"
+                />
               </div>
             </div>
             <div className="space-y-2">
@@ -142,7 +154,26 @@ export default function AdvancedOptions() {
                 </span>
               </div>
             </div>
+            <div className="space-y-2">
+              <label className="label-text">{t('config.targetError')}</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0.01}
+                  max={0.5}
+                  step={0.01}
+                  value={targetError}
+                  onChange={(e) => setTargetError(Number(e.target.value))}
+                  className="flex-1 accent-gold"
+                />
+                <span className="w-12 text-right font-mono text-sm tabular-nums text-on-surface">
+                  {targetError}%
+                </span>
+              </div>
+            </div>
           </div>
+
+          <RaidBuffsConsumables />
 
           <ScenarioBuilder />
 

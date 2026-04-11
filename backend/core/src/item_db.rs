@@ -86,6 +86,11 @@ struct CatalystData {
 }
 
 static CATALYST: OnceCell<CatalystData> = OnceCell::new();
+static FLASKS: OnceCell<Vec<Value>> = OnceCell::new();
+static POTIONS: OnceCell<Vec<Value>> = OnceCell::new();
+static FOODS: OnceCell<Vec<Value>> = OnceCell::new();
+static AUGMENTS: OnceCell<Vec<Value>> = OnceCell::new();
+static TEMP_ENCHANTS: OnceCell<Vec<Value>> = OnceCell::new();
 
 // ---- Load ----
 
@@ -297,12 +302,18 @@ pub fn load(data_dir: &Path) {
         let _ = INSTANCES.set(data);
     }
 
-    // Build encounter -> items index
+    // Build encounter -> items index from encounter-items.json (curated drop data).
     // Each item gets a `_source_instance_id` field so get_instance_drops can filter
     // items that share encounter IDs across multiple instances (e.g. profession pools).
+    let encounter_items_path = data_dir.join("encounter-items.json");
     let mut drops: HashMap<i64, Vec<Value>> = HashMap::new();
-    if let Some(items_map) = ITEMS.get() {
-        for item in items_map.values() {
+    if encounter_items_path.exists() {
+        let data: Vec<Value> = serde_json::from_reader(std::io::BufReader::new(
+            fs::File::open(&encounter_items_path).unwrap(),
+        ))
+        .unwrap_or_default();
+        println!("Loaded {} encounter items", data.len());
+        for item in &data {
             if let Some(sources) = item.get("sources").and_then(|s| s.as_array()) {
                 for src in sources {
                     if let Some(eid) = src.get("encounterId").and_then(|e| e.as_i64()) {
@@ -555,12 +566,51 @@ pub fn load(data_dir: &Path) {
         println!("Loaded {} localized item names", map.len());
         let _ = ITEM_NAMES.set(map);
     }
+
+    // Consumable data files
+    for (filename, cell) in [
+        ("flasks.json", &FLASKS),
+        ("potions.json", &POTIONS),
+        ("foods.json", &FOODS),
+        ("augments.json", &AUGMENTS),
+        ("temp-enchants.json", &TEMP_ENCHANTS),
+    ] {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            let data: Vec<Value> = serde_json::from_reader(std::io::BufReader::new(
+                fs::File::open(&path).unwrap(),
+            ))
+            .unwrap_or_default();
+            println!("Loaded {} entries from {}", data.len(), filename);
+            let _ = cell.set(data);
+        }
+    }
 }
 
 // ---- Accessors ----
 
 pub fn items() -> &'static HashMap<u64, Value> {
     ITEMS.get().expect("Game data not loaded")
+}
+
+pub fn list_flasks() -> &'static [Value] {
+    FLASKS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+pub fn list_potions() -> &'static [Value] {
+    POTIONS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+pub fn list_foods() -> &'static [Value] {
+    FOODS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+pub fn list_augments() -> &'static [Value] {
+    AUGMENTS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+pub fn list_temp_enchants() -> &'static [Value] {
+    TEMP_ENCHANTS.get().map(|v| v.as_slice()).unwrap_or(&[])
 }
 
 pub fn item_names() -> Option<&'static HashMap<u64, HashMap<String, String>>> {

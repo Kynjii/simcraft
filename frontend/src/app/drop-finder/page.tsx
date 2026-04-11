@@ -167,7 +167,7 @@ function Spinner() {
 
 export default function DropFinderPage() {
   const { t } = useLanguage();
-  const { simcInput } = useSimContext();
+  const { simcInput, hasInput } = useSimContext();
 
   // Spec selection: main spec on by default, off-specs toggleable
   const detectedClass = useMemo(() => detectClass(simcInput), [simcInput]);
@@ -229,15 +229,30 @@ export default function DropFinderPage() {
     return count;
   }, [simcInput]);
 
-  const hasCharacter = simcInput.trim().length >= 10;
+  const hasCharacter = hasInput;
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [difficulty, setDifficulty] = useState('heroic');
   const [dungeonDiff, setDungeonDiff] = useState('mythic+10');
   const [upgradeLevel, setUpgradeLevel] = useState(0);
-  const [category, setCategory] = useState<Category | ''>('');
+  const [category, setCategory] = useState<Category | ''>('mplus');
 
+  // Auto-select M+ "All Dungeons" on initial load
   useEffect(() => {
-    setSelected(new Set());
+    if (category === 'mplus' && !selectedId && dungeonCats.length > 0) {
+      const mplus = dungeonCats.find((dc) => dc.cat.key === 'mplus');
+      if (mplus) {
+        setSelectedId(String(mplus.cat.poolInstanceId));
+        setDungeonDiff(mplus.cat.defaultDifficulty);
+      }
+    }
+  }, [category, selectedId, dungeonCats, setSelectedId]);
+
+  // Select all items whenever drops change
+  useEffect(() => {
+    if (!drops) { setSelected(new Set()); return; }
+    const all = new Set<number>();
+    for (const items of Object.values(drops)) for (const item of items) all.add(item.item_id);
+    setSelected(all);
   }, [drops]);
 
   const isRaid = category === 'raids';
@@ -368,17 +383,26 @@ export default function DropFinderPage() {
 
   return (
     <div className="space-y-6 pb-20">
+           {/* Page header */}
+      <div>
+        <h1 className="font-headline font-black text-4xl uppercase tracking-tighter text-on-surface mb-2">
+          Drop Finder
+        </h1>
+        <p className="text-sm text-on-surface-variant max-w-2xl">
+          Find and simulate the best gear drops from across Azeroth. Refine your search by activity type and difficulty.
+        </p>
+      </div>
       <TalentPicker />
       <CategorySelector
           category={category}
           onChange={(key) => {
             setCategory(key);
-            // Auto-select pool for categories with no sub-instances (crafted, delves, prey)
             const dc = dungeonCats.find((d) => d.cat.key === key);
-            if (dc && dc.instances.length === 0) {
+            if (key === 'raids') {
+              setSelectedId('type:raid');
+            } else if (dc) {
               setSelectedId(String(dc.cat.poolInstanceId));
               setDungeonDiff(dc.cat.defaultDifficulty);
-              // Set upgrade level to match the default difficulty's track level
               const allDiffs = dc.cat.difficultyGroups
                 ? dc.cat.difficultyGroups.flatMap((g) => g.difficulties)
                 : dc.cat.difficulties;

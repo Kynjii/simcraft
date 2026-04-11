@@ -103,7 +103,7 @@ function useEquippedGear(simcInput: string): Record<string, GearItem> | null {
 }
 
 export default function QuickSimPage() {
-  const { simcInput } = useSimContext();
+  const { simcInput, hasInput } = useSimContext();
   const { t } = useLanguage();
 
   const characterInfo = useMemo(() => parseCharacterInfo(simcInput), [simcInput]);
@@ -129,11 +129,9 @@ export default function QuickSimPage() {
   );
 
   const validate = useCallback(() => {
-    if (simcInput.trim().length < 10) {
-      return t('validation.simcTooShort');
-    }
+    if (!hasInput) return t('validation.simcTooShort');
     return null;
-  }, [simcInput, t]);
+  }, [hasInput, t]);
 
   const { submit, submitting, error, buttonLabel } = useSimSubmit({
     endpoint: '/api/sim',
@@ -143,6 +141,16 @@ export default function QuickSimPage() {
 
   return (
     <div className="space-y-6 pb-20">
+      <div>
+        <h1 className="font-headline font-black text-4xl uppercase tracking-tighter text-on-surface mb-2">
+          Quick Sim
+        </h1>
+        <p className="text-sm text-on-surface-variant max-w-2xl">
+          Run a quick simulation to check your DPS and stat weights with your current gear and talents.
+        </p>
+      </div>
+
+
       {/* Character summary card */}
       {characterInfo && (
         <div className="bg-surface-container-low rounded-xl border border-outline-variant/10 p-6 flex items-center justify-between">
@@ -206,7 +214,7 @@ export default function QuickSimPage() {
         onSubmit={submit}
         submitting={submitting}
         buttonLabel={buttonLabel(t('button.runSimulation'))}
-        disabled={simcInput.trim().length < 10}
+        disabled={!hasInput}
       />
     </div>
   );

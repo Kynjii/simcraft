@@ -29,12 +29,16 @@ export function useSimSubmit({ endpoint, buildPayload, validate, onBeforeNavigat
     selectedTalent,
     targetCount,
     fightLength,
+    targetError,
     customApl,
     simcHeader,
     simcBasePlayer,
     simcRaidActors,
     simcPostCombos,
     simcFooter,
+    raidBuffs,
+    consumables,
+    expansionOptions,
     scenarios,
     clearScenarios,
   } = useSimContext();
@@ -78,8 +82,8 @@ export function useSimSubmit({ endpoint, buildPayload, validate, onBeforeNavigat
 
       const sharedPayload = {
         ...pagePayload,
-        iterations: 10000,
-        target_error: 0.1,
+        iterations: 100000,
+        target_error: targetError,
         threads,
         ...(batchId ? { batch_id: batchId } : {}),
         ...(selectedTalent ? { talents: selectedTalent } : {}),
@@ -90,6 +94,18 @@ export function useSimSubmit({ endpoint, buildPayload, validate, onBeforeNavigat
         ...(simcRaidActors ? { simc_raid_actors: simcRaidActors } : {}),
         ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
         ...(simcFooter ? { simc_footer: simcFooter } : {}),
+        // Raid buffs: only send overrides for disabled buffs
+        ...(Object.values(raidBuffs).some((v) => !v)
+          ? { raid_buffs: Object.fromEntries(Object.entries(raidBuffs).map(([k, v]) => [k, v ? 1 : 0])) }
+          : {}),
+        // Consumables: only send non-empty selections
+        ...(Object.values(consumables).some((v) => v)
+          ? { consumables: Object.fromEntries(Object.entries(consumables).filter(([, v]) => v)) }
+          : {}),
+        // Expansion options: only send overrides for disabled options
+        ...(Object.values(expansionOptions).some((v) => !v)
+          ? { expansion_options: Object.fromEntries(Object.entries(expansionOptions).map(([k, v]) => [k, v ? 1 : 0])) }
+          : {}),
       };
 
       const results = await Promise.allSettled(
@@ -159,12 +175,16 @@ export function useSimSubmit({ endpoint, buildPayload, validate, onBeforeNavigat
     selectedTalent,
     targetCount,
     fightLength,
+    targetError,
     customApl,
     simcHeader,
     simcBasePlayer,
     simcRaidActors,
     simcPostCombos,
     simcFooter,
+    raidBuffs,
+    consumables,
+    expansionOptions,
     scenarios,
     clearScenarios,
     t,

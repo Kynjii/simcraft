@@ -11,7 +11,8 @@ import { useSimSubmit } from '../lib/useSimSubmit';
 import TalentPicker from '../components/talents/TalentPicker';
 import ConfigFooter from '../components/sim-config/ConfigPanel';
 import { useLanguage } from '../lib/i18n';
-import { localizedItemName, useItemNames } from '../lib/useItemInfo';
+import { localizedItemName, useItemNames, getWowheadUrl } from '../lib/useItemInfo';
+import { useWowheadTooltips } from '../lib/useWowheadTooltips';
 
 // ---- Types ----
 
@@ -97,7 +98,7 @@ function useUpgradeData(simcInput: string) {
 export default function UpgradeComparePage() {
   const { t, locale } = useLanguage();
   useItemNames();
-  const { simcInput, maxCombinations } = useSimContext();
+  const { simcInput, hasInput, maxCombinations } = useSimContext();
 
   const { data, loading } = useUpgradeData(simcInput);
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
@@ -119,6 +120,7 @@ export default function UpgradeComparePage() {
     [candidates]
   );
   const itemInfo = useItemInfo(infoQueries);
+  useWowheadTooltips([itemInfo]);
 
   // Debounced combo count
   const comboTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -161,9 +163,10 @@ export default function UpgradeComparePage() {
   }, [simcInput, selectedSlots, maxCombinations]);
 
   const validate = useCallback(() => {
+    if (!hasInput) return t('validation.simcTooShort');
     if (selectedSlots.size === 0) return 'Select at least one upgradeable item.';
     return null;
-  }, [selectedSlots]);
+  }, [hasInput, selectedSlots, t]);
 
   const {
     submit: handleSubmit,
@@ -201,7 +204,7 @@ export default function UpgradeComparePage() {
       }));
   }, [candidates, currencies]);
 
-  const hasCharacter = simcInput.trim().length >= 10;
+  const hasCharacter = hasInput;
 
   const toggleGroup = (groupCandidates: PrepareCandidate[]) => {
     const slots = groupCandidates.map((c) => c.slot);
@@ -230,6 +233,14 @@ export default function UpgradeComparePage() {
 
   return (
     <div className="space-y-6 pb-20">
+            <div>
+        <h1 className="font-headline font-black text-4xl uppercase tracking-tighter text-on-surface mb-2">
+          Crest Upgrades
+        </h1>
+        <p className="text-sm text-on-surface-variant max-w-2xl">
+          Compare upgrade paths for your equipped gear using crests. Find the most impactful upgrades for your budget.
+        </p>
+      </div>
       <TalentPicker />
       {/* Explainer */}
       <div className="rounded-lg bg-surface-container-high/50 px-4 py-3">
@@ -346,6 +357,8 @@ export default function UpgradeComparePage() {
                           else next.add(c.slot);
                           setSelectedSlots(next);
                         }}
+                        href={c.item_id > 0 ? getWowheadUrl(c.item_id, locale) : undefined}
+                        wowheadData={c.item_id > 0 ? `bonus=${c.bonus_ids.join(':')}&ilvl=${c.ilevel}` : undefined}
                       />
                     );
                   })}

@@ -4,9 +4,12 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import type { FightScenario } from '../../lib/types';
 import { API_URL } from '../../lib/api';
 
+
 interface SimContextType {
   simcInput: string;
   setSimcInput: (v: string) => void;
+  /** Whether simcInput has enough content to be worth sending to the server. */
+  hasInput: boolean;
   fightStyle: string;
   setFightStyle: (v: string) => void;
   threads: number;
@@ -19,6 +22,8 @@ interface SimContextType {
   setTargetCount: (v: number) => void;
   fightLength: number;
   setFightLength: (v: number) => void;
+  targetError: number;
+  setTargetError: (v: number) => void;
   customApl: string;
   setCustomApl: (v: string) => void;
   // Expert Mode injection points
@@ -32,6 +37,13 @@ interface SimContextType {
   setSimcPostCombos: (v: string) => void;
   simcFooter: string;
   setSimcFooter: (v: string) => void;
+  // Raid buffs, consumables, expansion options
+  raidBuffs: Record<string, boolean>;
+  setRaidBuffs: (v: Record<string, boolean>) => void;
+  consumables: Record<string, string>;
+  setConsumables: (v: Record<string, string>) => void;
+  expansionOptions: Record<string, boolean>;
+  setExpansionOptions: (v: Record<string, boolean>) => void;
   // Multi-talent compare
   talentBuilds: { name: string; talentString: string }[];
   setTalentBuilds: (v: { name: string; talentString: string }[]) => void;
@@ -48,6 +60,34 @@ export function useSimContext() {
   const ctx = useContext(SimContext);
   if (!ctx) throw new Error('useSimContext must be used within SimProvider');
   return ctx;
+}
+
+export const DEFAULT_RAID_BUFFS: Record<string, boolean> = {
+  bloodlust: true,
+  arcane_intellect: true,
+  power_word_fortitude: true,
+  battle_shout: true,
+  mystic_touch: true,
+  chaos_brand: true,
+  skyfury: true,
+  mark_of_the_wild: true,
+  hunters_mark: true,
+  bleeding: true,
+};
+
+export const DEFAULT_EXPANSION_OPTIONS: Record<string, boolean> = {
+  'midnight.crucible_of_erratic_energies_violence': true,
+  'midnight.crucible_of_erratic_energies_sustenance': true,
+  'midnight.crucible_of_erratic_energies_predation': true,
+};
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function readStored(key: string, fallback: number): number {
@@ -69,12 +109,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [selectedTalent, setSelectedTalent] = useState('');
   const [targetCount, setTargetCount] = useState(1);
   const [fightLength, setFightLength] = useState(300);
+  const [targetError, _setTargetError] = useState(0.1);
   const [customApl, setCustomApl] = useState('');
   const [simcHeader, setSimcHeader] = useState('');
   const [simcBasePlayer, setSimcBasePlayer] = useState('');
   const [simcRaidActors, setSimcRaidActors] = useState('');
   const [simcPostCombos, setSimcPostCombos] = useState('');
   const [simcFooter, setSimcFooter] = useState('');
+  const [raidBuffs, _setRaidBuffs] = useState<Record<string, boolean>>(DEFAULT_RAID_BUFFS);
+  const [consumables, _setConsumables] = useState<Record<string, string>>({});
+  const [expansionOptions, _setExpansionOptions] = useState<Record<string, boolean>>(DEFAULT_EXPANSION_OPTIONS);
   const [talentBuilds, setTalentBuilds] = useState<{ name: string; talentString: string }[]>([]);
   const [scenarios, setScenarios] = useState<FightScenario[]>([]);
 
@@ -82,6 +126,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
     try {
       _setSimcInput(readSessionString('simhammer_simc_input', ''));
       _setThreads(readStored('simhammer_threads', 0));
+      const storedError = localStorage.getItem('simhammer_target_error');
+      if (storedError != null) {
+        const n = parseFloat(storedError);
+        if (Number.isFinite(n) && n > 0) _setTargetError(n);
+      }
+      _setRaidBuffs(readStoredJson('simhammer_raid_buffs', DEFAULT_RAID_BUFFS));
+      _setConsumables(readStoredJson('simhammer_consumables', {}));
+      _setExpansionOptions(readStoredJson('simhammer_expansion_options', DEFAULT_EXPANSION_OPTIONS));
     } catch {}
 
     // Fetch server-enforced max combinations (web/demo only)
@@ -119,11 +171,33 @@ export function SimProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []);
 
+  const hasInput = simcInput.trim().length >= 50;
+
+  const setRaidBuffs = useCallback((v: Record<string, boolean>) => {
+    _setRaidBuffs(v);
+    try { localStorage.setItem('simhammer_raid_buffs', JSON.stringify(v)); } catch {}
+  }, []);
+
+  const setConsumables = useCallback((v: Record<string, string>) => {
+    _setConsumables(v);
+    try { localStorage.setItem('simhammer_consumables', JSON.stringify(v)); } catch {}
+  }, []);
+
+  const setExpansionOptions = useCallback((v: Record<string, boolean>) => {
+    _setExpansionOptions(v);
+    try { localStorage.setItem('simhammer_expansion_options', JSON.stringify(v)); } catch {}
+  }, []);
+
   const setThreads = useCallback((v: number) => {
     _setThreads(v);
     try {
       localStorage.setItem('simhammer_threads', String(v));
     } catch {}
+  }, []);
+
+  const setTargetError = useCallback((v: number) => {
+    _setTargetError(v);
+    try { localStorage.setItem('simhammer_target_error', String(v)); } catch {}
   }, []);
 
   const setMaxCombinations = useCallback((v: number | undefined) => {
@@ -142,6 +216,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       value={{
         simcInput,
         setSimcInput,
+        hasInput,
         fightStyle,
         setFightStyle,
         threads,
@@ -154,6 +229,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
         setTargetCount,
         fightLength,
         setFightLength,
+        targetError,
+        setTargetError,
         customApl,
         setCustomApl,
         simcHeader,
@@ -166,6 +243,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
         setSimcPostCombos,
         simcFooter,
         setSimcFooter,
+        raidBuffs,
+        setRaidBuffs,
+        consumables,
+        setConsumables,
+        expansionOptions,
+        setExpansionOptions,
         talentBuilds,
         setTalentBuilds,
         scenarios,
