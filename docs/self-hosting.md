@@ -16,6 +16,22 @@ Visit **http://localhost:8000** — everything runs from a single container.
 
 Use `SIMC_ENABLED_BRANCHES=weekly` or `SIMC_ENABLED_BRANCHES=nightly` to install only one branch. If omitted, it defaults to `weekly`.
 
+### Admin Panel
+
+Set the `ADMIN_PASSWORD` environment variable to enable the admin panel at `/admin`:
+
+```bash
+docker run -p 8000:8000 \
+  -e ADMIN_PASSWORD=your-secret-password \
+  -v simhammer-db:/app/db \
+  ghcr.io/sortbek/simcraft:latest
+```
+
+The admin panel lets you:
+- View and manage installed SimC versions (install, update, remove)
+- Check for new SimC releases
+- Configure server limits (max combinations, max scenarios)
+
 On startup, the container automatically:
 1. Fetches the latest SimC binaries from GitHub Releases
 2. Downloads game data from Raidbots
@@ -65,13 +81,16 @@ docker compose -f docker-compose.dev.yml up --build
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIMC_ENABLED_BRANCHES` | `weekly` | Comma-separated SimC branches to install and expose, e.g. `weekly,nightly` |
+| `SIMC_CHECK_INTERVAL` | `3600` | Seconds between automatic SimC update checks |
 | `SIMC_PATH` | `/usr/local/bin/simc` | Path to SimulationCraft binary |
 | `DATA_DIR` | `./resources/data` | Path to game data JSON files |
 | `DATABASE_URL` | `simhammer.db` | SQLite path or `postgres://` URL |
+| `DB_BACKEND` | _(auto)_ | Force `sqlite` or `postgres` (normally detected from `DATABASE_URL` scheme) |
 | `PORT` | `8000` | Server port |
 | `BIND_HOST` | `0.0.0.0` | Server bind address |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend API URL (frontend build-time) |
 | `FRONTEND_DIR` | _(unset)_ | Path to static frontend files (standalone mode) |
+| `ADMIN_PASSWORD` | _(unset)_ | Password to access the admin panel at `/admin`. Panel is disabled if not set |
 | `MAX_JOBS` | `50` / `200` | Max retained jobs (desktop / web) |
-| `MAX_COMBINATIONS` | `500` | Max gear combinations for Top Gear sims |
-| `MAX_SCENARIOS` | `10` | Max scenarios per batch (`0` to disable) |
+| `MAX_COMBINATIONS` | `500` | Max gear combinations for Top Gear sims (configurable via admin panel) |
+| `MAX_SCENARIOS` | `10` | Max scenarios per batch, `0` to disable (configurable via admin panel) |

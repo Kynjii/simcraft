@@ -34,7 +34,7 @@ Game data and SimC binary must be in `backend/resources/`. See [Self-Hosting](se
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-Handles everything — compiles Rust, builds SimC, fetches game data, starts frontend.
+Handles everything — compiles Rust, downloads SimC, fetches game data, starts frontend.
 
 ## Desktop Development
 
@@ -51,7 +51,7 @@ cd desktop && npm install && cd ..
 npm run desktop:dev
 ```
 
-On first run, this fetches game data from Raidbots and compiles SimC from source (stored in `backend/resources/`). Subsequent runs skip this step.
+On first run, this fetches game data from Raidbots and downloads a pre-built SimC binary from GitHub (stored in `backend/resources/`). Subsequent runs skip this step.
 
 This starts:
 1. Rust backend (debug mode, port 17384)

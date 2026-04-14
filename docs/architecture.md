@@ -17,7 +17,7 @@ SimHammer is a monorepo with three deployment modes sharing one codebase:
         │              │              │
    Rust/Actix     Rust/Actix     Rust/Actix
         │              │              │
-     SQLite      SQLite/Postgres  MemoryStorage
+     SQLite      SQLite/Postgres   SQLite
         │              │              │
        simc           simc          simc
 ```
@@ -46,7 +46,7 @@ The core library (`simhammer-core`) provides:
 - **Result parser** — extracts DPS, abilities, stat weights from SimC JSON output
 - **SimC runner** — spawns simc as a subprocess with staged execution
 - **Game data** — loads Raidbots JSON files (items, enchants, bonuses, instances, upgrade tracks)
-- **Storage** — `JobStorage` trait with `MemoryStorage` (desktop), `SqliteStorage` (web), `PostgresStorage` (web)
+- **Storage** — Repository pattern with sqlx: `JobRepo`, `CharacterRepo`, `RouteRepo`, `SettingsRepo`. Supports both SQLite and PostgreSQL (detected from `DATABASE_URL` scheme, or set explicitly via `DB_BACKEND`)
 
 ### Key Patterns
 
@@ -71,8 +71,8 @@ SimHammer uses `simhammer.com` as a caching proxy for Blizzard API data:
 |----------|---------|-------|
 | `/api/blizzard/season` | M+ rotation, season info | 7 days |
 | `/api/blizzard/instances` | Expansion dungeons + raids with tile images | 7 days |
-| `/api/blizzard/character/{realm}/{name}/media/{type}` | Character render/avatar/inset (302 redirect) | 1 hour |
-| `/api/blizzard/character/{realm}/{name}/profile` | Character summary with faction | 15 min |
+| `/api/blizzard/character/{region}/{realm}/{name}/media/{type}` | Character render/avatar/inset (302 redirect) | 1 hour |
+| `/api/blizzard/character/{region}/{realm}/{name}/profile` | Character summary with faction | 15 min |
 
 Instance images and faction assets are fetched at **build time** and served locally — no runtime CDN dependency.
 
