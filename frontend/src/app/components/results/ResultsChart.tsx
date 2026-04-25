@@ -11,6 +11,7 @@ interface Ability {
   portion_dps: number;
   school: string;
   spell_id?: number;
+  icon?: string;
   children?: Ability[];
 }
 
@@ -66,6 +67,7 @@ export default function ResultsChart({ dps, abilities }: ResultsChartProps) {
                 percent={percent}
                 barWidth={barWidth}
                 iconName={
+                  ability.icon ||
                   (ability.spell_id ? icons.get(ability.spell_id) : undefined) ||
                   FALLBACK_ICONS[ability.name]
                 }
@@ -95,7 +97,7 @@ export default function ResultsChart({ dps, abilities }: ResultsChartProps) {
                       color={childColor}
                       percent={childPercent}
                       barWidth={childBarWidth}
-                      iconName={child.spell_id ? icons.get(child.spell_id) : undefined}
+                      iconName={child.icon || (child.spell_id ? icons.get(child.spell_id) : undefined)}
                       compact
                     />
                   );

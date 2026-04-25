@@ -46,6 +46,45 @@ fn extract_portion_apse(stat: &Value) -> f64 {
     }
 }
 
+/// Pick a representative pet/summon ability icon for the given player.
+/// Accepts whatever simc puts in `specialization` or `type` (e.g. "Beast Mastery Hunter",
+/// "Hunter", "hunter") and matches loosely on substrings so casing/format drift doesn't
+/// break the lookup. Returns None for classes without a meaningful pet.
+fn pet_icon_for_spec(spec_or_class: &str) -> Option<&'static str> {
+    let s = spec_or_class.to_lowercase();
+    if s.contains("death knight") || s.contains("death_knight") || s.contains("deathknight") {
+        return Some("spell_shadow_animatedead");
+    }
+    if s.contains("hunter") {
+        return Some("ability_hunter_beastcall");
+    }
+    if s.contains("warlock") {
+        return Some("spell_shadow_summoninfernal");
+    }
+    if s.contains("mage") {
+        return Some("spell_magic_lesserinvisibility");
+    }
+    if s.contains("shaman") {
+        return Some("spell_fire_elemental_totem");
+    }
+    if s.contains("priest") {
+        return Some("spell_shadow_shadowfiend");
+    }
+    if s.contains("monk") {
+        return Some("ability_monk_summontigerstatue");
+    }
+    if s.contains("druid") {
+        return Some("ability_druid_forceofnature");
+    }
+    if s.contains("paladin") {
+        return Some("ability_paladin_artofwar");
+    }
+    if s.contains("evoker") {
+        return Some("ability_evoker_dragonrage");
+    }
+    None
+}
+
 /// Extract ability stats from a player or pet stats array into the abilities list.
 fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>) {
     let stats = match stats.and_then(|s| s.as_array()) {
@@ -229,6 +268,13 @@ pub fn parse_simc_result(raw: &Value) -> Value {
     // Pet abilities: roll up each pet's full ability list into a single parent row
     // named after the pet, with the individual abilities as children. This matches
     // raidbots' presentation (one row per pet, expandable for the breakdown).
+    let pet_icon = pet_icon_for_spec(
+        player
+            .get("specialization")
+            .or_else(|| player.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
     if let Some(stats_pets) = player.get("stats_pets").and_then(|p| p.as_object()) {
         for (pet_name, pet_stats) in stats_pets {
             let mut pet_abilities: Vec<Value> = Vec::new();
@@ -261,6 +307,9 @@ pub fn parse_simc_result(raw: &Value) -> Value {
                 "portion_dps": round1(total_dps),
                 "school": school,
             });
+            if let Some(icon) = pet_icon {
+                pet_entry["icon"] = json!(icon);
+            }
             if pet_abilities.len() > 1 {
                 pet_entry["children"] = json!(pet_abilities);
             }
