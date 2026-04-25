@@ -91,7 +91,7 @@ export default function ResultsChartRow({
             className="h-full rounded transition-all"
             style={{
               width: `${barWidth}%`,
-              background: `linear-gradient(90deg, ${color} 0%, transparent 100%)`,
+              background: color,
               opacity: compact ? 0.7 : 1,
             }}
           />

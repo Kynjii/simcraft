@@ -34,9 +34,12 @@ fn extract_version(raw: &Value) -> String {
     }
 }
 
-/// Read portion_aps from a stat entry (can be an object with `mean` or a bare number).
-fn extract_portion_aps(stat: &Value) -> f64 {
-    match stat.get("portion_aps") {
+/// Read portion_apse from a stat entry (can be an object with `mean` or a bare number).
+/// `portion_apse` is normalized over total fight length, so per-ability rows sum to
+/// the player's overall DPS. The `portion_aps` variant divides by actor active time,
+/// which inflates abilities that only fire during short uptimes (e.g. pet windows).
+fn extract_portion_apse(stat: &Value) -> f64 {
+    match stat.get("portion_apse") {
         Some(v) if v.is_object() => v.get("mean").and_then(|m| m.as_f64()).unwrap_or(0.0),
         Some(v) => v.as_f64().unwrap_or(0.0),
         None => 0.0,
@@ -44,8 +47,7 @@ fn extract_portion_aps(stat: &Value) -> f64 {
 }
 
 /// Extract ability stats from a player or pet stats array into the abilities list.
-/// If `pet_name` is Some, abilities are prefixed with the pet name.
-fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>, pet_name: Option<&str>) {
+fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>) {
     let stats = match stats.and_then(|s| s.as_array()) {
         Some(s) => s,
         None => return,
@@ -56,14 +58,14 @@ fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>, pet_nam
             continue;
         }
 
-        // Get DPS from portion_aps (object with mean, or bare number).
+        // Get DPS from portion_apse (object with mean, or bare number).
         // Sum parent + children to get total DPS for this ability group.
-        let parent_dps = extract_portion_aps(stat);
+        let parent_dps = extract_portion_apse(stat);
         let children_arr = stat.get("children").and_then(|c| c.as_array());
         let mut children_dps_total = 0.0;
         if let Some(children) = children_arr {
             for child in children {
-                children_dps_total += extract_portion_aps(child);
+                children_dps_total += extract_portion_apse(child);
             }
         }
         let dps_contribution = parent_dps + children_dps_total;
@@ -76,10 +78,7 @@ fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>, pet_nam
             .get("school")
             .and_then(|s| s.as_str())
             .unwrap_or("physical");
-        let display_name = match pet_name {
-            Some(pn) => format!("{}: {}", title_case(&pn.replace('_', " ")), raw_name),
-            None => raw_name.to_string(),
-        };
+        let display_name = raw_name.to_string();
 
         // Resolve spell_id: prefer parent, fall back to first child
         let mut spell_id = stat.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -120,7 +119,7 @@ fn extract_stats_into(abilities: &mut Vec<Value>, stats: Option<&Value>, pet_nam
             }
 
             for child in children {
-                let child_dps = extract_portion_aps(child);
+                let child_dps = extract_portion_apse(child);
                 if child_dps <= 0.0 {
                     continue;
                 }
@@ -225,12 +224,47 @@ pub fn parse_simc_result(raw: &Value) -> Value {
 
     // Ability breakdown (player + pets)
     let mut abilities: Vec<Value> = Vec::new();
-    extract_stats_into(&mut abilities, player.get("stats"), None);
+    extract_stats_into(&mut abilities, player.get("stats"));
 
-    // Pet abilities (simc stores these as stats_pets: { pet_name: [stats...] })
+    // Pet abilities: roll up each pet's full ability list into a single parent row
+    // named after the pet, with the individual abilities as children. This matches
+    // raidbots' presentation (one row per pet, expandable for the breakdown).
     if let Some(stats_pets) = player.get("stats_pets").and_then(|p| p.as_object()) {
         for (pet_name, pet_stats) in stats_pets {
-            extract_stats_into(&mut abilities, Some(pet_stats), Some(pet_name));
+            let mut pet_abilities: Vec<Value> = Vec::new();
+            extract_stats_into(&mut pet_abilities, Some(pet_stats));
+            if pet_abilities.is_empty() {
+                continue;
+            }
+
+            pet_abilities.sort_by(|a, b| {
+                let a_dps = a["portion_dps"].as_f64().unwrap_or(0.0);
+                let b_dps = b["portion_dps"].as_f64().unwrap_or(0.0);
+                b_dps
+                    .partial_cmp(&a_dps)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let total_dps: f64 = pet_abilities
+                .iter()
+                .map(|a| a["portion_dps"].as_f64().unwrap_or(0.0))
+                .sum();
+
+            let display_name = title_case(&pet_name.replace('_', " "));
+            let school = pet_abilities[0]["school"]
+                .as_str()
+                .unwrap_or("physical")
+                .to_string();
+
+            let mut pet_entry = json!({
+                "name": display_name,
+                "portion_dps": round1(total_dps),
+                "school": school,
+            });
+            if pet_abilities.len() > 1 {
+                pet_entry["children"] = json!(pet_abilities);
+            }
+            abilities.push(pet_entry);
         }
     }
 
