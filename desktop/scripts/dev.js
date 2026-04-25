@@ -12,6 +12,13 @@ const ROOT = path.join(__dirname, "..", "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
 const FRONTEND_DIR = path.join(ROOT, "frontend");
 
+const args = process.argv.slice(2);
+const BUILD_SIMC = args.includes("--build-simc") || !!process.env.SIMC_BUILD_FROM_SOURCE;
+const SIMC_REF = (() => {
+  const idx = args.indexOf("--simc-ref");
+  return (idx !== -1 && args[idx + 1]) ? args[idx + 1] : (process.env.SIMC_GIT_REF || "HEAD");
+})();
+
 const ext = process.platform === "win32" ? ".exe" : "";
 const serverBinary = path.join(BACKEND_DIR, "target", "debug", `simhammer-server${ext}`);
 
@@ -128,31 +135,45 @@ async function ensureResources() {
   const simcDir = path.join(BACKEND_DIR, "resources", "simc");
   const metadataFile = path.join(dataDir, "metadata.json");
 
-  // Ensure simc is installed, then auto-update to latest weekly
-  console.log("[dev] Checking SimC binary...");
-  try {
-    await ensureSimc(simcDir, (progress) => {
-      process.stdout.write(`\r[dev] Downloading SimC... ${Math.round(progress * 100)}%`);
-    });
-
-    // Auto-update to latest weekly
-    const release = await getLatestWeeklyRelease();
-    if (release) {
-      const installed = listInstalledVersions(simcDir);
-      if (!installed.some((v) => v.tag === release.tag)) {
-        console.log(`\n[dev] Updating SimC to ${release.tag}...`);
-        await installVersion(simcDir, release, (progress) => {
-          process.stdout.write(`\r[dev] Downloading SimC ${release.tag}... ${Math.round(progress * 100)}%`);
-        });
-        setActiveVersion(simcDir, release.tag);
-        console.log(`\n[dev] SimC updated to ${release.tag}`);
-      } else {
-        console.log(`\n[dev] SimC ${release.tag} already installed`);
-      }
+  // Ensure simc is installed — either build from source or download pre-built
+  if (BUILD_SIMC) {
+    const { buildSimc } = require("./build-simc");
+    console.log(`[dev] Building SimC from source (${SIMC_REF})...`);
+    try {
+      await buildSimc(simcDir, SIMC_REF, (msg) => {
+        console.log(`[dev] SimC build: ${msg}`);
+      });
+      console.log("[dev] SimC built from source.");
+    } catch (err) {
+      console.error(`[dev] SimC build failed: ${err.message}`);
+      console.error("[dev] Simulations will not work until SimC is available.");
     }
-  } catch (err) {
-    console.error(`\n[dev] SimC setup failed: ${err.message}`);
-    console.error("[dev] Simulations will not work until SimC is available.");
+  } else {
+    console.log("[dev] Checking SimC binary...");
+    try {
+      await ensureSimc(simcDir, (progress) => {
+        process.stdout.write(`\r[dev] Downloading SimC... ${Math.round(progress * 100)}%`);
+      });
+
+      // Auto-update to latest weekly
+      const release = await getLatestWeeklyRelease();
+      if (release) {
+        const installed = listInstalledVersions(simcDir);
+        if (!installed.some((v) => v.tag === release.tag)) {
+          console.log(`\n[dev] Updating SimC to ${release.tag}...`);
+          await installVersion(simcDir, release, (progress) => {
+            process.stdout.write(`\r[dev] Downloading SimC ${release.tag}... ${Math.round(progress * 100)}%`);
+          });
+          setActiveVersion(simcDir, release.tag);
+          console.log(`\n[dev] SimC updated to ${release.tag}`);
+        } else {
+          console.log(`\n[dev] SimC ${release.tag} already installed`);
+        }
+      }
+    } catch (err) {
+      console.error(`\n[dev] SimC setup failed: ${err.message}`);
+      console.error("[dev] Simulations will not work until SimC is available.");
+    }
   }
 
   // Fetch game data if missing
