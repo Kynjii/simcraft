@@ -139,29 +139,53 @@ export default function SimResultClient() {
 
   if (job.status === 'failed') {
     return (
-      <div className="card border-red-500/20 bg-red-500/[0.03] p-6">
-        <p className="mb-2 text-sm font-semibold text-red-400">{t('results.simulationFailed')}</p>
-        <p className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-red-400/60">
-          {job.error || t('results.unknownError')}
-        </p>
+      <div className="space-y-3">
+        <div className="card border-red-500/20 bg-red-500/[0.03] p-6">
+          <p className="mb-2 text-sm font-semibold text-red-400">{t('results.simulationFailed')}</p>
+          <p className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-red-400/60">
+            {job.error || t('results.unknownError')}
+          </p>
+        </div>
+        <div className="flex items-center justify-center text-[10px] uppercase tracking-wider text-on-surface-variant/40">
+          <a
+            href={`${API_URL}/api/sim/${id}/input`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-white"
+          >
+            {t('results.rawInput')}
+          </a>
+        </div>
       </div>
     );
   }
 
   if (job.status === 'pending' || job.status === 'running') {
     return (
-      <SimStatus
-        status={job.status}
-        progress={job.progress}
-        progressStage={job.progress_stage}
-        progressDetail={job.progress_detail}
-        stagesCompleted={job.stages_completed}
-        jobId={id}
-        onCancelled={() => setJob({ ...job, status: 'cancelled' })}
-        logLines={logLines}
-        showLogs={showLogs}
-        onToggleLogs={handleToggleLogs}
-      />
+      <div className="space-y-3">
+        <SimStatus
+          status={job.status}
+          progress={job.progress}
+          progressStage={job.progress_stage}
+          progressDetail={job.progress_detail}
+          stagesCompleted={job.stages_completed}
+          jobId={id}
+          onCancelled={() => setJob({ ...job, status: 'cancelled' })}
+          logLines={logLines}
+          showLogs={showLogs}
+          onToggleLogs={handleToggleLogs}
+        />
+        <div className="flex items-center justify-center text-[10px] uppercase tracking-wider text-on-surface-variant/40">
+          <a
+            href={`${API_URL}/api/sim/${id}/input`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-white"
+          >
+            {t('results.rawInput')}
+          </a>
+        </div>
+      </div>
     );
   }
 

@@ -97,7 +97,10 @@ fn normalize_talent_string(talent_str: &str) -> Option<String> {
     let (version, mut pos) = read_bits(&bits, 0, 8);
     let (spec_id, new_pos) = read_bits(&bits, pos, 16);
     pos = new_pos;
-    pos += 128; // skip hash
+    let (hash_lo, new_pos) = read_bits(&bits, pos, 64);
+    pos = new_pos;
+    let (hash_hi, new_pos) = read_bits(&bits, pos, 64);
+    pos = new_pos;
 
     let tree = item_db::talent_tree(spec_id)?;
 
@@ -291,10 +294,10 @@ fn normalize_talent_string(talent_str: &str) -> Option<String> {
     let mut writer = BitWriter::new();
     writer.write(version, 8);
     writer.write(spec_id, 16);
-    // Zero hash (128 bits)
-    for _ in 0..16 {
-        writer.write(0, 8);
-    }
+    // Preserve the original 128-bit talent-tree hash; simc validates against it
+    // and decoding misaligns when it's zeroed.
+    writer.write(hash_lo, 64);
+    writer.write(hash_hi, 64);
 
     for &node_id in &full_node_order {
         let sel = match selections.get(&node_id) {
