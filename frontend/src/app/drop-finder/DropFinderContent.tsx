@@ -7,7 +7,12 @@ import { useSimContext } from '../components/sim-config/SimContext';
 import ToggleButtonGroup from '../components/ui/ToggleButtonGroup';
 import { API_URL } from '../lib/api';
 import { useSimSubmit } from '../lib/useSimSubmit';
-import type { SeasonConfigResponse, DifficultyDef, DifficultyGroup, DungeonCategory } from '../lib/types';
+import type {
+  SeasonConfigResponse,
+  DifficultyDef,
+  DifficultyGroup,
+  DungeonCategory,
+} from '../lib/types';
 import ItemTable from '../components/loot/ItemTable';
 import DungeonDrawer from '../components/loot/DungeonDrawer';
 import DifficultySelect from '../components/loot/DifficultySelect';
@@ -24,14 +29,27 @@ import {
   getTrackInfo,
   resolveUpgrade,
   type DropItem,
+  type DropItemPayload,
   type Instance,
   type UpgradeTracks,
 } from '../components/loot/types';
-
+import { parseEquippedGear, resolveInherits, type EquippedGear } from '../lib/inheritedGear';
 
 const SLOT_ORDER = [
-  'Main Hand', 'Off Hand', 'Head', 'Neck', 'Shoulder', 'Back',
-  'Chest', 'Wrist', 'Hands', 'Waist', 'Legs', 'Feet', 'Finger', 'Trinket',
+  'Main Hand',
+  'Off Hand',
+  'Head',
+  'Neck',
+  'Shoulder',
+  'Back',
+  'Chest',
+  'Wrist',
+  'Hands',
+  'Waist',
+  'Legs',
+  'Feet',
+  'Finger',
+  'Trinket',
 ];
 
 const TRACK_SHORT: Record<string, string> = {
@@ -234,6 +252,8 @@ export default function DropFinderContent() {
     return count;
   }, [simcInput]);
 
+  const equippedGear: EquippedGear = useMemo(() => parseEquippedGear(simcInput), [simcInput]);
+
   const hasCharacter = hasInput;
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [difficulty, setDifficulty] = useState('heroic');
@@ -257,10 +277,7 @@ export default function DropFinderContent() {
       ? instances.find((i) => String(i.id) === selectedId)
       : null;
 
-  const dungeonInstances = useMemo(
-    () => activeDungeonCat?.instances ?? [],
-    [activeDungeonCat]
-  );
+  const dungeonInstances = useMemo(() => activeDungeonCat?.instances ?? [], [activeDungeonCat]);
 
   // Auto-select M+ pool and initialize dungeon pool on category change
   useEffect(() => {
@@ -284,7 +301,10 @@ export default function DropFinderContent() {
 
   // Select all items whenever drops change
   useEffect(() => {
-    if (!drops) { setSelected(new Set()); return; }
+    if (!drops) {
+      setSelected(new Set());
+      return;
+    }
     const all = new Set<number>();
     for (const items of Object.values(drops)) for (const item of items) all.add(item.item_id);
     setSelected(all);
@@ -357,7 +377,9 @@ export default function DropFinderContent() {
     if (!selectedDiffDef) return null;
     const trackLevels = selectedDiffDef.track ? upgradeTracks[selectedDiffDef.track] : null;
     const max = trackLevels?.at(-1)?.max_level ?? selectedDiffDef.level;
-    const ilvl = trackLevels?.find((t) => t.level === selectedDiffDef.level)?.ilvl ?? selectedDiffDef.fixedIlvl;
+    const ilvl =
+      trackLevels?.find((t) => t.level === selectedDiffDef.level)?.ilvl ??
+      selectedDiffDef.fixedIlvl;
     const tc = selectedDiffDef.track ? TRACK_COLORS[selectedDiffDef.track] : null;
     return { ilvl, max, tc, track: selectedDiffDef.track, level: selectedDiffDef.level };
   }, [selectedDiffDef, upgradeTracks]);
@@ -376,7 +398,9 @@ export default function DropFinderContent() {
     if (selectedNames.size === instanceList.length) return drops; // all selected = no filter
     const filtered: Record<string, DropItem[]> = {};
     for (const [slot, items] of Object.entries(drops)) {
-      const kept = items.filter((item) => !item.instance_name || selectedNames.has(item.instance_name));
+      const kept = items.filter(
+        (item) => !item.instance_name || selectedNames.has(item.instance_name)
+      );
       if (kept.length > 0) filtered[slot] = kept;
     }
     return filtered;
@@ -532,7 +556,7 @@ export default function DropFinderContent() {
   // Sim submission
   const buildPayload = useCallback(() => {
     if (!visibleDrops || selected.size === 0) return null;
-    const dropItems: DropItem[] = [];
+    const dropItems: DropItemPayload[] = [];
     for (const items of Object.values(visibleDrops)) {
       for (const item of items) {
         if (selected.has(item.item_id)) {
@@ -543,17 +567,29 @@ export default function DropFinderContent() {
             upgradeLevel,
             upgradeTracks
           );
+          const slotInherits = resolveInherits(item.inventory_type, specName ?? '', equippedGear);
           dropItems.push({
             ...item,
             ilevel: resolved.ilvl,
             quality: resolved.quality,
             bonus_ids: resolved.bonus_id ? [resolved.bonus_id] : [],
+            slot_inherits: slotInherits,
           });
         }
       }
     }
     return { simc_input: simcInput, drop_items: dropItems };
-  }, [visibleDrops, selected, simcInput, difficulty, dungeonDiff, upgradeLevel, upgradeTracks]);
+  }, [
+    visibleDrops,
+    selected,
+    simcInput,
+    difficulty,
+    dungeonDiff,
+    upgradeLevel,
+    upgradeTracks,
+    equippedGear,
+    specName,
+  ]);
 
   const validate = useCallback(() => {
     if (!visibleDrops || selected.size === 0) return t('validation.selectItems');
@@ -577,25 +613,22 @@ export default function DropFinderContent() {
     <div className="space-y-4 pb-20">
       {/* Page header */}
       <div>
-        <h1 className="font-headline font-black text-4xl uppercase tracking-tighter text-on-surface mb-2">
+        <h1 className="mb-2 font-headline text-4xl font-black uppercase tracking-tighter text-on-surface">
           Drop Finder
         </h1>
-        <p className="text-sm text-on-surface-variant max-w-2xl">
-          Find and simulate the best gear drops from across Azeroth. Refine your search by activity type and difficulty.
+        <p className="max-w-2xl text-sm text-on-surface-variant">
+          Find and simulate the best gear drops from across Azeroth. Refine your search by activity
+          type and difficulty.
         </p>
       </div>
 
       <TalentPicker />
 
-      <CategorySelector
-        category={category}
-        onChange={setCategory}
-        dungeonCats={dungeonCats}
-      />
+      <CategorySelector category={category} onChange={setCategory} dungeonCats={dungeonCats} />
 
       {/* Configuration card: dungeon pool + difficulty + upgrade level */}
       {(isRaid || isDungeon) && (
-        <div className="card p-5 space-y-4">
+        <div className="card space-y-4 p-5">
           {/* Instance pool drawer */}
           {isDungeon && !isPoolOnly && dungeonInstances.length > 0 && (
             <div>
@@ -624,7 +657,9 @@ export default function DropFinderContent() {
 
           {/* Difficulty + upgrade level */}
           {activeDifficulties.length > 0 && (
-            <div className={`grid gap-4 ${currentTrackInfo && drops ? 'grid-cols-1 sm:grid-cols-2' : ''}`}>
+            <div
+              className={`grid gap-4 ${currentTrackInfo && drops ? 'grid-cols-1 sm:grid-cols-2' : ''}`}
+            >
               <div>
                 <label className="label-text">{t('dropFinder.difficulty')}</label>
                 <DifficultySelect
@@ -685,7 +720,11 @@ export default function DropFinderContent() {
                         }`}
                       >
                         {formatSpecName(spec)}
-                        {isMain && <span className="ml-1 text-[11px] opacity-50">{t('dropFinder.mainSpec')}</span>}
+                        {isMain && (
+                          <span className="ml-1 text-[11px] opacity-50">
+                            {t('dropFinder.mainSpec')}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -694,9 +733,7 @@ export default function DropFinderContent() {
             )}
           </>
         ) : (
-          <p className="text-xs text-muted">
-            {t('dropFinder.pasteExport')}
-          </p>
+          <p className="text-xs text-muted">{t('dropFinder.pasteExport')}</p>
         )}
 
         {availableSlots.length > 1 && (
@@ -708,13 +745,17 @@ export default function DropFinderContent() {
               open={slotFilterOpen}
               onToggle={(e) => setSlotFilterOpen((e.target as HTMLDetailsElement).open)}
             >
-              <summary className={`flex cursor-pointer list-none items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-all duration-150 [&::-webkit-details-marker]:hidden ${
-                slotFilterOpen || excludedSlots.size > 0
-                  ? 'border-gold/40 bg-gold/[0.08] text-gold'
-                  : 'border-transparent bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface'
-              }`}>
+              <summary
+                className={`flex cursor-pointer list-none items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-all duration-150 [&::-webkit-details-marker]:hidden ${
+                  slotFilterOpen || excludedSlots.size > 0
+                    ? 'border-gold/40 bg-gold/[0.08] text-gold'
+                    : 'border-transparent bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface'
+                }`}
+              >
                 <span className="font-semibold">Slots</span>
-                <span className={slotFilterOpen || excludedSlots.size > 0 ? 'text-gold/90' : ''}>{slotFilterSummary}</span>
+                <span className={slotFilterOpen || excludedSlots.size > 0 ? 'text-gold/90' : ''}>
+                  {slotFilterSummary}
+                </span>
                 {excludedSlots.size > 0 && (
                   <span className="rounded-full border border-gold/20 bg-black/10 px-1.5 py-0.5 text-[10px] font-bold text-gold">
                     {excludedSlots.size} hidden
@@ -768,7 +809,9 @@ export default function DropFinderContent() {
                         }`}
                       >
                         <span className={isEnabled ? '' : 'line-through'}>{slot}</span>
-                        <span className={`h-2.5 w-2.5 rounded-full ${isEnabled ? 'bg-gold' : 'bg-outline-variant/30'}`} />
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full ${isEnabled ? 'bg-gold' : 'bg-outline-variant/30'}`}
+                        />
                       </button>
                     );
                   })}
@@ -782,9 +825,7 @@ export default function DropFinderContent() {
       {loading && <Spinner />}
 
       {!loading && selectedId && !visibleDrops && (
-        <p className="py-6 text-center text-sm text-muted">
-          {t('dropFinder.noDrops')}
-        </p>
+        <p className="py-6 text-center text-sm text-muted">{t('dropFinder.noDrops')}</p>
       )}
 
       {!loading && visibleDrops && (
@@ -808,13 +849,14 @@ export default function DropFinderContent() {
             upgradeTracks={upgradeTracks}
             headerLabel={headerLabel}
             equippedEmbellishments={equippedEmbellishments}
+            equippedGear={equippedGear}
+            spec={specName ?? ''}
           />
 
           <SimcDownloadBanner />
           <ErrorAlert message={error} />
         </>
       )}
-
 
       <ConfigFooter
         onSubmit={handleSubmit}
