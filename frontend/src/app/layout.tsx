@@ -5,7 +5,6 @@ import TopBar from './components/layout/TopBar';
 import FooterDisclaimer from './components/layout/FooterDisclaimer';
 import { SimProvider } from './components/sim-config/SimContext';
 import { LanguageProvider } from './lib/i18n';
-import UpdateChecker from './components/layout/UpdateChecker';
 import ContentScaler, { ScaleProvider } from './components/layout/ContentScaler';
 import './globals.css';
 import packageJson from '../../package.json';
@@ -31,7 +30,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script src="https://wow.zamimg.com/js/tooltips.js" strategy="afterInteractive" />
       </head>
       <body className="min-h-screen">
-        <UpdateChecker />
         <LanguageProvider>
           <ScaleProvider>
             <SimProvider>

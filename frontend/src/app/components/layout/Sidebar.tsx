@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import SidebarRoutes from './SidebarRoutes';
 import LanguageSelector from './LanguageSelector';
 import { ScaleSelector } from './ContentScaler';
+import UpdateChecker from './UpdateChecker';
 import { useIsDesktop } from '../../lib/useIsDesktop';
 import { useLanguage } from '../../lib/i18n';
 
@@ -50,8 +51,11 @@ export default function Sidebar() {
     <aside className="desktop-no-drag fixed left-0 top-0 z-40 flex h-full w-64 flex-col border-r border-outline-variant/20 bg-[#0e0e0e] shadow-[10px_0_30px_rgba(0,0,0,0.5)]">
       {/* Logo */}
       <div className="desktop-drag shrink-0 px-6 pb-8 pt-6">
-        <div className="desktop-no-drag font-headline text-xl font-black tracking-tighter text-primary">
-          SimHammer
+        <div className="desktop-no-drag flex items-center gap-2">
+          <span className="font-headline text-xl font-black tracking-tighter text-primary">
+            SimHammer
+          </span>
+          <UpdateChecker />
         </div>
       </div>
 
