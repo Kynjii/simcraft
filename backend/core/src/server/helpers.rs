@@ -207,6 +207,7 @@ fn resolved_item_to_value(item: &crate::types::ResolvedItem, is_equipped: bool) 
         "bonus_ids": item.bonus_ids,
         "enchant_id": item.enchant_id,
         "gem_id": item.gem_id,
+        "sockets": item.sockets,
     });
     if item.is_catalyst {
         v["is_catalyst"] = json!(true);

@@ -266,13 +266,19 @@ pub fn generate_top_gear_input_with_talents(
                         && (replace_gems || extract_gem_id(simc) == 0)
                 })
                 .unwrap_or(false);
-            // Check alternatives for any item with sockets
+            // Check alternatives for any item with sockets. When replace_gems is
+            // off, only items with empty sockets count — already-gemmed items
+            // should keep their gem.
             let alt_has_socket = items_by_slot
                 .get(&slot_str)
                 .map(|items| {
-                    items
-                        .iter()
-                        .any(|item| item.get("sockets").and_then(|s| s.as_u64()).unwrap_or(0) > 0)
+                    items.iter().any(|item| {
+                        let has_sockets =
+                            item.get("sockets").and_then(|s| s.as_u64()).unwrap_or(0) > 0;
+                        let has_gem =
+                            item.get("gem_id").and_then(|g| g.as_u64()).unwrap_or(0) > 0;
+                        has_sockets && (replace_gems || !has_gem)
+                    })
                 })
                 .unwrap_or(false);
             if equipped_has_socket || alt_has_socket {
@@ -643,10 +649,10 @@ pub fn generate_top_gear_input_with_talents(
     };
 
     // Helper: apply a gem combo assignment to a simc string for a slot.
-    // If the gem combo has a gem for this slot, set/replace gem_id.
-    // If replace_gems is true, also strip existing gem_id first.
+    // Only writes a gem when the socket is empty, or when replace_gems is on.
     let apply_gem = |slot: &str, simc: &str, gem_combo: &HashMap<String, u64>| -> String {
         let has_socket = simc_has_socket(simc);
+        let already_gemmed = extract_gem_id(simc) > 0;
 
         let mut result = if replace_gems && has_socket {
             let re = Regex::new(r",?gem_id=\d+").unwrap();
@@ -655,7 +661,7 @@ pub fn generate_top_gear_input_with_talents(
             simc.to_string()
         };
         if let Some(&gid) = gem_combo.get(slot) {
-            if has_socket {
+            if has_socket && (replace_gems || !already_gemmed) {
                 result = set_gem_id(&result, gid);
             }
         }
@@ -1053,5 +1059,6 @@ pub fn generate_top_gear_input_with_talents(
         }
     } // end gem_iter loop
 
-    Ok((lines.join("\n"), total_combo_count, combo_metadata))
+    let emitted_combo_count = combo_number - 2;
+    Ok((lines.join("\n"), emitted_combo_count, combo_metadata))
 }
