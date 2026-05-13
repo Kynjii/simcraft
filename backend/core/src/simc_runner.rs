@@ -129,32 +129,106 @@ const EXPANSION_OPTIONS: &[&str] = &[
 struct Stage {
     name: &'static str,
     target_error: f64,
-    keep_top: f64,
-    min_keep: usize,
 }
 
+/// Adaptive precision schedule. Each entry runs a SimC pass at its `target_error`.
+/// The final entry is the user-visible precision and is never pruned. Intermediate
+/// stages prune to `STAGE_CUTOFF_MULTIPLIER * target_error` of the top mean.
 const STAGES: &[Stage] = &[
-    Stage {
-        name: "Low",
-        target_error: 1.0,
-        keep_top: 0.5,
-        min_keep: 10,
-    },
-    Stage {
-        name: "Medium",
-        target_error: 0.2,
-        keep_top: 0.3,
-        min_keep: 5,
-    },
-    Stage {
-        name: "High",
-        target_error: 0.05,
-        keep_top: 1.0,
-        min_keep: 1,
-    },
+    Stage { name: "Probe",   target_error: 2.0  },
+    Stage { name: "Coarse",  target_error: 1.0  },
+    Stage { name: "Refine",  target_error: 0.5  },
+    Stage { name: "Medium",  target_error: 0.2  },
+    Stage { name: "Fine",    target_error: 0.1  },
+    Stage { name: "Final",   target_error: 0.05 },
 ];
 
 const STAGED_THRESHOLD: usize = 10;
+
+/// Min survivors retained at any pruning step. Acts as a floor inside
+/// `select_kept_profilesets` so a tight distribution still advances ≥ this many.
+const STAGE_MIN_KEEP: usize = 5;
+
+/// If survivors after pruning fall to or below this number, jump straight to the
+/// final precision stage instead of walking the remaining intermediate stages.
+const SKIP_TO_FINAL_THRESHOLD: usize = 5;
+
+/// Iteration count for stage `idx` of `total` stages. Final stage runs at the
+/// user-requested iteration count; earlier stages scale down geometrically (×2
+/// per step) with a floor of 50 iterations.
+fn iterations_for_stage(stage_idx: usize, total_stages: usize, user_iters: u32) -> u32 {
+    if stage_idx + 1 >= total_stages {
+        return user_iters;
+    }
+    let from_end = (total_stages - 1 - stage_idx) as i32;
+    let divisor = 2f64.powi(from_end);
+    let scaled = (user_iters as f64 / divisor) as u32;
+    std::cmp::max(50, scaled)
+}
+
+/// Progress-bar range `(start_pct, end_pct)` allocated to stage `idx` of `total`.
+/// Spans 10..95 evenly across the full schedule so skipped stages produce a
+/// visible jump forward when fast-forwarding to final.
+fn progress_range_for_stage(stage_idx: usize, total_stages: usize) -> (u8, u8) {
+    let span = 95u8 - 10u8;
+    let per_stage = span as f64 / total_stages as f64;
+    let start = 10u8 + (stage_idx as f64 * per_stage) as u8;
+    let end = 10u8 + ((stage_idx + 1) as f64 * per_stage) as u8;
+    (start, end)
+}
+
+/// Multiplier on a stage's target_error used to set the keep threshold.
+///
+/// At a stage's target_error `te` (95% CI half-width as a percent), two profileset
+/// means could in the worst case overlap by `2 * te`. Anything below that gap from
+/// the top mean provably cannot be the true best — safe to prune. We keep `min_keep`
+/// as a floor so a flat distribution (all combos statistically tied) still progresses.
+const STAGE_CUTOFF_MULTIPLIER: f64 = 2.0;
+
+/// Decide which profilesets survive a stage cut.
+///
+/// Returns the set of profileset names whose mean lands within
+/// `STAGE_CUTOFF_MULTIPLIER * target_error` percent of the top mean. If fewer than
+/// `min_keep` pass that threshold, tops up to `min_keep` from the sorted list.
+fn select_kept_profilesets(
+    profilesets: &[Value],
+    target_error: f64,
+    min_keep: usize,
+) -> std::collections::HashSet<String> {
+    if profilesets.is_empty() {
+        return std::collections::HashSet::new();
+    }
+
+    let mut sorted: Vec<&Value> = profilesets.iter().collect();
+    sorted.sort_by(|a, b| {
+        let a_mean = a.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b_mean = b.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        b_mean
+            .partial_cmp(&a_mean)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let top_mean = sorted[0].get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let threshold = top_mean * (1.0 - STAGE_CUTOFF_MULTIPLIER * target_error / 100.0);
+
+    let mut kept: Vec<&&Value> = sorted
+        .iter()
+        .filter(|ps| ps.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0) >= threshold)
+        .collect();
+
+    if kept.len() < min_keep {
+        let take_n = std::cmp::min(min_keep, sorted.len());
+        kept = sorted.iter().take(take_n).collect();
+    }
+
+    kept.into_iter()
+        .filter_map(|ps| {
+            ps.get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+}
 
 /// Build the full simc input from the options Value (convenience wrapper).
 pub fn build_simc_input_from_options(simc_input: &str, options: &Value) -> String {
@@ -830,30 +904,29 @@ pub async fn run_simc_staged(
     // Key: combo name, Value: profileset result object from the stage where it was cut.
     let mut eliminated: HashMap<String, Value> = HashMap::new();
 
-    let stage_iterations = [
-        std::cmp::max(100, user_iterations / 10),
-        std::cmp::max(500, user_iterations / 2),
-        user_iterations,
-    ];
+    let total_stages = STAGES.len();
+    let final_idx = total_stages - 1;
+    let mut stage_idx = 0;
 
-    // Progress ranges per stage: [10..40), [40..70), [70..95)
-    let stage_ranges: [(u8, u8); 3] = [(10, 40), (40, 70), (70, 95)];
-
-    for (stage_idx, stage) in STAGES.iter().enumerate() {
-        let is_final = stage_idx == STAGES.len() - 1;
-        let (range_start, range_end) = stage_ranges[stage_idx];
+    while stage_idx < total_stages {
+        let stage = &STAGES[stage_idx];
+        let is_final = stage_idx == final_idx;
+        let (range_start, range_end) = progress_range_for_stage(stage_idx, total_stages);
+        let stage_iters = iterations_for_stage(stage_idx, total_stages, user_iterations);
 
         on_progress(
             range_start,
-            &format!("Stage {} of {}", stage_idx + 1, STAGES.len()),
+            &format!("Stage {} of {}", stage_idx + 1, total_stages),
             &format!("{} combos · {} precision", remaining, stage.name),
         );
 
         println!(
             "Job {}: Stage {} — {} combos, target_error={}, iterations={}",
-            job_id, stage.name, remaining, stage.target_error, stage_iterations[stage_idx]
+            job_id, stage.name, remaining, stage.target_error, stage_iters
         );
 
+        let stage_label = stage.name.to_lowercase();
+        let stage_name_for_progress = stage.name;
         let stage_result = run_simc_subprocess(
             simc_path,
             false, // not raw
@@ -862,23 +935,23 @@ pub async fn run_simc_staged(
             options,
             fight_style,
             stage.target_error,
-            stage_iterations[stage_idx],
+            stage_iters,
             threads,
             desired_targets,
             max_time,
             false,
             single_actor_batch,
-            &stage.name.to_lowercase(),
+            &stage_label,
             false, // skip HTML for staged sims
             |current, total| {
                 let pct = range_start
                     + ((current as f64 / total as f64) * (range_end - range_start) as f64) as u8;
                 on_progress(
                     pct,
-                    &format!("Stage {} of {}", stage_idx + 1, STAGES.len()),
+                    &format!("Stage {} of {}", stage_idx + 1, total_stages),
                     &format!(
                         "{}/{} profilesets · {} precision",
-                        current, total, stage.name
+                        current, total, stage_name_for_progress
                     ),
                 );
             },
@@ -899,41 +972,21 @@ pub async fn run_simc_staged(
             break;
         }
 
-        let keep_count = std::cmp::max(
-            stage.min_keep,
-            (profilesets.len() as f64 * stage.keep_top) as usize,
-        );
+        let keep_combos =
+            select_kept_profilesets(&profilesets, stage.target_error, STAGE_MIN_KEEP);
 
-        if keep_count >= profilesets.len() {
+        if keep_combos.len() >= profilesets.len() {
             on_stage_complete(&format!(
                 "{} · kept all {} combos",
                 stage.name,
                 profilesets.len()
             ));
+            stage_idx += 1;
             continue;
         }
 
-        let mut sorted_ps = profilesets.clone();
-        sorted_ps.sort_by(|a, b| {
-            let a_mean = a.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let b_mean = b.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            b_mean
-                .partial_cmp(&a_mean)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let keep_combos: std::collections::HashSet<String> = sorted_ps
-            .iter()
-            .take(keep_count)
-            .filter_map(|ps| {
-                ps.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(|s| s.to_string())
-            })
-            .collect();
-
-        // Save eliminated combos' DPS from this stage
-        for ps in &sorted_ps {
+        // Save eliminated combos' DPS from this stage (for the final result merge).
+        for ps in &profilesets {
             let name = ps.get("name").and_then(|n| n.as_str()).unwrap_or("");
             if !name.is_empty() && !keep_combos.contains(name) {
                 eliminated.insert(name.to_string(), ps.clone());
@@ -957,6 +1010,13 @@ pub async fn run_simc_staged(
 
         current_input = filter_simc_input(&current_input, &keep_combos);
         remaining = keep_combos.len();
+
+        // Skip intermediate stages once survivors are few enough — jump to final precision.
+        if remaining <= SKIP_TO_FINAL_THRESHOLD {
+            stage_idx = final_idx;
+        } else {
+            stage_idx += 1;
+        }
     }
 
     // Inject eliminated combos into the final result so all combos appear in output.
@@ -985,4 +1045,189 @@ pub async fn run_simc_staged(
     }
 
     result.ok_or_else(|| "No simulation result produced".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ps(name: &str, mean: f64) -> Value {
+        json!({ "name": name, "mean": mean })
+    }
+
+    #[test]
+    fn empty_input_returns_empty() {
+        let kept = select_kept_profilesets(&[], 1.0, 5);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn keeps_combos_within_two_target_error_of_top() {
+        // Top = 1000, te = 1.0% → threshold = 1000 * 0.98 = 980.
+        // 990 kept, 980 kept (boundary), 979.99 dropped, 950 dropped.
+        let pss = vec![
+            ps("a", 1000.0),
+            ps("b", 990.0),
+            ps("c", 980.0),
+            ps("d", 979.99),
+            ps("e", 950.0),
+        ];
+        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        assert!(kept.contains("a"));
+        assert!(kept.contains("b"));
+        assert!(kept.contains("c"));
+        assert!(!kept.contains("d"));
+        assert!(!kept.contains("e"));
+    }
+
+    #[test]
+    fn min_keep_floor_takes_top_n_when_too_few_pass_threshold() {
+        // Top = 1000, te = 0.1% → threshold = 1000 * 0.998 = 998.
+        // Only "a" passes (1000 ≥ 998), but min_keep = 3 → top 3 by mean.
+        let pss = vec![
+            ps("a", 1000.0),
+            ps("b", 500.0),
+            ps("c", 400.0),
+            ps("d", 300.0),
+        ];
+        let kept = select_kept_profilesets(&pss, 0.1, 3);
+        assert_eq!(kept.len(), 3);
+        assert!(kept.contains("a"));
+        assert!(kept.contains("b"));
+        assert!(kept.contains("c"));
+        assert!(!kept.contains("d"));
+    }
+
+    #[test]
+    fn all_tied_within_threshold_keeps_all() {
+        // All within 1% of top, te = 1.0% (threshold = 98%) → everyone passes.
+        let pss = vec![ps("a", 1000.0), ps("b", 995.0), ps("c", 990.0)];
+        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        assert_eq!(kept.len(), 3);
+    }
+
+    #[test]
+    fn high_target_error_keeps_more_than_low_target_error() {
+        // Same data, different te → larger te keeps more.
+        let pss = vec![
+            ps("a", 1000.0),
+            ps("b", 970.0),
+            ps("c", 960.0),
+            ps("d", 950.0),
+        ];
+        let kept_loose = select_kept_profilesets(&pss, 2.0, 1); // threshold = 960
+        let kept_tight = select_kept_profilesets(&pss, 0.5, 1); // threshold = 990
+        assert!(kept_loose.len() > kept_tight.len());
+        assert_eq!(kept_tight.len(), 1); // only "a"
+    }
+
+    #[test]
+    fn min_keep_capped_at_total_combos_count() {
+        // min_keep larger than the input size shouldn't panic.
+        let pss = vec![ps("a", 1000.0), ps("b", 500.0)];
+        let kept = select_kept_profilesets(&pss, 0.01, 999);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn unnamed_profilesets_filtered_out() {
+        // A profileset missing the "name" field can't be tracked downstream.
+        let pss = vec![ps("a", 1000.0), json!({ "mean": 990.0 })];
+        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        assert_eq!(kept.len(), 1);
+        assert!(kept.contains("a"));
+    }
+
+    #[test]
+    fn missing_mean_treated_as_zero_and_drops_to_bottom() {
+        // A profileset without "mean" sorts to the bottom; threshold logic still works.
+        let pss = vec![
+            ps("a", 1000.0),
+            json!({ "name": "no_mean" }),
+            ps("b", 990.0),
+        ];
+        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        assert!(kept.contains("a"));
+        assert!(kept.contains("b"));
+        assert!(!kept.contains("no_mean"));
+    }
+
+    // ---- iterations_for_stage ----
+
+    #[test]
+    fn iterations_final_stage_uses_user_iters() {
+        assert_eq!(iterations_for_stage(5, 6, 1000), 1000);
+        assert_eq!(iterations_for_stage(0, 1, 1000), 1000);
+    }
+
+    #[test]
+    fn iterations_earlier_stages_scale_geometrically() {
+        // 6 stages, user_iters = 1000:
+        // stage 5 (final) = 1000, stage 4 = 500, stage 3 = 250, stage 2 = 125,
+        // stage 1 = 62, stage 0 = 50 (floor).
+        assert_eq!(iterations_for_stage(0, 6, 1000), 50);
+        assert_eq!(iterations_for_stage(1, 6, 1000), 62);
+        assert_eq!(iterations_for_stage(2, 6, 1000), 125);
+        assert_eq!(iterations_for_stage(3, 6, 1000), 250);
+        assert_eq!(iterations_for_stage(4, 6, 1000), 500);
+        assert_eq!(iterations_for_stage(5, 6, 1000), 1000);
+    }
+
+    #[test]
+    fn iterations_floor_50_kicks_in_for_low_user_iters() {
+        // user_iters = 100, 6 stages → early stages would compute < 50, get floored.
+        assert_eq!(iterations_for_stage(0, 6, 100), 50);
+        assert_eq!(iterations_for_stage(1, 6, 100), 50); // 100/16 = 6, floored
+        assert_eq!(iterations_for_stage(2, 6, 100), 50); // 100/8 = 12, floored
+        assert_eq!(iterations_for_stage(3, 6, 100), 50); // 100/4 = 25, floored
+        assert_eq!(iterations_for_stage(4, 6, 100), 50); // 100/2 = 50
+        assert_eq!(iterations_for_stage(5, 6, 100), 100);
+    }
+
+    // ---- progress_range_for_stage ----
+
+    #[test]
+    fn progress_ranges_span_10_to_95() {
+        let (start, _) = progress_range_for_stage(0, 6);
+        assert_eq!(start, 10);
+        let (_, end) = progress_range_for_stage(5, 6);
+        assert!(end >= 90 && end <= 95);
+    }
+
+    #[test]
+    fn progress_ranges_are_monotonic_and_non_overlapping() {
+        let total = 6;
+        let mut prev_end = 0u8;
+        for i in 0..total {
+            let (start, end) = progress_range_for_stage(i, total);
+            assert!(start >= prev_end, "stage {i} start {start} < prev end {prev_end}");
+            assert!(end > start, "stage {i} end {end} <= start {start}");
+            prev_end = end;
+        }
+    }
+
+    // ---- staged schedule sanity ----
+
+    #[test]
+    fn staged_schedule_targets_decrease_monotonically() {
+        // Each stage must be at least as precise as the previous (te ≤ previous te).
+        let mut prev = f64::INFINITY;
+        for stage in STAGES {
+            assert!(
+                stage.target_error <= prev,
+                "stage {} target_error {} > previous {}",
+                stage.name,
+                stage.target_error,
+                prev
+            );
+            prev = stage.target_error;
+        }
+    }
+
+    #[test]
+    fn staged_schedule_final_is_005_percent() {
+        let final_stage = STAGES.last().unwrap();
+        assert_eq!(final_stage.target_error, 0.05);
+    }
 }
