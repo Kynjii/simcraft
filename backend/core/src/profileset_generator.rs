@@ -138,7 +138,7 @@ mod tests {
         generate_enchant_gem_input, generate_top_gear_input_with_talents,
         generate_upgrade_compare_input,
     };
-    use crate::test_support::ensure_game_data_loaded;
+    use crate::test_support::{ensure_game_data_loaded, TestItem};
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
 
@@ -560,19 +560,20 @@ main_hand=,id=200\n";
         sockets: u64,
         gem_id: u64,
     ) -> serde_json::Value {
-        json!({
-            "slot": slot,
-            "simc_string": simc_string,
-            "is_equipped": is_equipped,
-            "origin": if is_equipped { "equipped" } else { "bags" },
-            "item_id": item_id,
-            "ilevel": 0,
-            "name": format!("Test {} {}", slot, item_id),
-            "bonus_ids": bonus_ids,
-            "enchant_id": 0,
-            "gem_id": gem_id,
-            "sockets": sockets,
-        })
+        let mut b = TestItem::new(item_id)
+            .slot(slot)
+            .simc_string(simc_string)
+            .bonus_ids(bonus_ids)
+            .sockets(sockets)
+            .gem_id(gem_id);
+        if is_equipped {
+            b = b.equipped();
+        }
+        let mut v = b.build();
+        // Tests assert on a synthesized display name from the make_item factory.
+        v["ilevel"] = json!(0);
+        v["name"] = json!(format!("Test {} {}", slot, item_id));
+        v
     }
 
     fn uid(item_id: u64, bonus_ids: &[u64], origin: &str, slot: &str) -> String {

@@ -200,17 +200,16 @@ pub(super) fn validate_item_limits<V: Borrow<Value>>(gear_set: &HashMap<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ensure_game_data_loaded;
-    use serde_json::json;
+    use crate::test_support::{ensure_game_data_loaded, TestItem};
 
     fn item(id: u64) -> Value {
-        json!({ "item_id": id, "bonus_ids": [] })
+        TestItem::new(id).build()
     }
     fn item_with_origin(id: u64, origin: &str) -> Value {
-        json!({ "item_id": id, "bonus_ids": [], "origin": origin })
+        TestItem::new(id).origin(origin).build()
     }
     fn item_with_catalyst(id: u64) -> Value {
-        json!({ "item_id": id, "bonus_ids": [], "is_catalyst": true })
+        TestItem::new(id).catalyst().build()
     }
 
     #[test]

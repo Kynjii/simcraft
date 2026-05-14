@@ -145,17 +145,14 @@ pub(super) fn build_slot_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ensure_game_data_loaded;
-    use serde_json::json;
+    use crate::test_support::{ensure_game_data_loaded, TestItem};
 
     fn make(item_id: u64, slot: &str, is_equipped: bool, bonus_ids: Vec<u64>) -> Value {
-        json!({
-            "item_id": item_id,
-            "slot": slot,
-            "is_equipped": is_equipped,
-            "bonus_ids": bonus_ids,
-            "origin": if is_equipped { "equipped" } else { "bags" },
-        })
+        let mut b = TestItem::new(item_id).slot(slot).bonus_ids(bonus_ids);
+        if is_equipped {
+            b = b.equipped();
+        }
+        b.build()
     }
 
     fn uid_str(item_id: u64, bonus_ids: &[u64], origin: &str, slot: &str) -> String {

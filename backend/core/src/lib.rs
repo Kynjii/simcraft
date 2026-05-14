@@ -15,6 +15,7 @@ pub mod types;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use serde_json::{json, Value};
     use std::path::PathBuf;
     use std::sync::Once;
 
@@ -29,5 +30,92 @@ pub(crate) mod test_support {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/data-compacted");
             crate::item_db::load(&data_dir);
         });
+    }
+
+    /// Builder for the JSON item shape used by gear-resolution, generator, and
+    /// constraint tests. Set only the fields a test cares about; everything else
+    /// defaults to the same baseline values the production code expects.
+    pub(crate) struct TestItem {
+        item_id: u64,
+        slot: String,
+        is_equipped: bool,
+        origin: String,
+        bonus_ids: Vec<u64>,
+        enchant_id: u64,
+        gem_id: u64,
+        sockets: u64,
+        simc_string: String,
+        is_catalyst: bool,
+    }
+
+    impl TestItem {
+        pub(crate) fn new(item_id: u64) -> Self {
+            Self {
+                item_id,
+                slot: String::new(),
+                is_equipped: false,
+                origin: "bags".to_string(),
+                bonus_ids: Vec::new(),
+                enchant_id: 0,
+                gem_id: 0,
+                sockets: 0,
+                simc_string: String::new(),
+                is_catalyst: false,
+            }
+        }
+        pub(crate) fn slot(mut self, slot: &str) -> Self {
+            self.slot = slot.to_string();
+            self
+        }
+        pub(crate) fn equipped(mut self) -> Self {
+            self.is_equipped = true;
+            self.origin = "equipped".to_string();
+            self
+        }
+        pub(crate) fn origin(mut self, origin: &str) -> Self {
+            self.origin = origin.to_string();
+            self
+        }
+        pub(crate) fn bonus_ids(mut self, ids: Vec<u64>) -> Self {
+            self.bonus_ids = ids;
+            self
+        }
+        pub(crate) fn enchant_id(mut self, id: u64) -> Self {
+            self.enchant_id = id;
+            self
+        }
+        pub(crate) fn gem_id(mut self, id: u64) -> Self {
+            self.gem_id = id;
+            self
+        }
+        pub(crate) fn sockets(mut self, n: u64) -> Self {
+            self.sockets = n;
+            self
+        }
+        pub(crate) fn simc_string(mut self, s: &str) -> Self {
+            self.simc_string = s.to_string();
+            self
+        }
+        pub(crate) fn catalyst(mut self) -> Self {
+            self.is_catalyst = true;
+            self
+        }
+        pub(crate) fn build(self) -> Value {
+            let mut v = json!({
+                "item_id": self.item_id,
+                "slot": self.slot,
+                "is_equipped": self.is_equipped,
+                "origin": self.origin,
+                "bonus_ids": self.bonus_ids,
+                "enchant_id": self.enchant_id,
+                "gem_id": self.gem_id,
+                "sockets": self.sockets,
+                "simc_string": self.simc_string,
+            });
+            if self.is_catalyst {
+                v["is_catalyst"] = json!(true);
+            }
+            v
+        }
     }
 }

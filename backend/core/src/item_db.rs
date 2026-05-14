@@ -1478,7 +1478,7 @@ pub fn dungeon_normal_quality() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ensure_game_data_loaded;
+    use crate::test_support::{ensure_game_data_loaded, TestItem};
     use serde_json::json;
 
     fn item(
@@ -1488,13 +1488,14 @@ mod tests {
         simc_string: &str,
         bonus_ids: Vec<u64>,
     ) -> Value {
-        json!({
-            "item_id": id,
-            "is_equipped": is_equipped,
-            "enchant_id": enchant_id,
-            "simc_string": simc_string,
-            "bonus_ids": bonus_ids,
-        })
+        let mut b = TestItem::new(id)
+            .enchant_id(enchant_id)
+            .simc_string(simc_string)
+            .bonus_ids(bonus_ids);
+        if is_equipped {
+            b = b.equipped();
+        }
+        b.build()
     }
 
     // ---- apply_copy_enchants ----
