@@ -190,13 +190,22 @@ const STAGE_CUTOFF_MULTIPLIER: f64 = 2.0;
 
 /// Decide which profilesets survive a stage cut.
 ///
-/// Returns the set of profileset names whose mean lands within
-/// `STAGE_CUTOFF_MULTIPLIER * target_error` percent of the top mean. If fewer than
-/// `min_keep` pass that threshold, tops up to `min_keep` from the sorted list.
+/// Drops any profileset whose mean falls more than `STAGE_CUTOFF_MULTIPLIER * target_error`
+/// percent below **both**:
+/// - the top mean (can no longer be the best at this precision), and
+/// - `baseline_mean`, if provided (can no longer be an upgrade at this precision).
+///
+/// The baseline cutoff matters most when the user already has good gear and most
+/// alternatives aren't actually upgrades — those get pruned at Probe instead of
+/// trickling through every stage just because they cluster near the (small) top.
+///
+/// `min_keep` is a floor: if fewer than `min_keep` clear both thresholds we top
+/// up from the sorted list, so a flat distribution still progresses.
 fn select_kept_profilesets(
     profilesets: &[Value],
     target_error: f64,
     min_keep: usize,
+    baseline_mean: Option<f64>,
 ) -> std::collections::HashSet<String> {
     if profilesets.is_empty() {
         return std::collections::HashSet::new();
@@ -212,7 +221,10 @@ fn select_kept_profilesets(
     });
 
     let top_mean = sorted[0].get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let threshold = top_mean * (1.0 - STAGE_CUTOFF_MULTIPLIER * target_error / 100.0);
+    let cutoff_factor = 1.0 - STAGE_CUTOFF_MULTIPLIER * target_error / 100.0;
+    let top_threshold = top_mean * cutoff_factor;
+    let baseline_threshold = baseline_mean.map(|m| m * cutoff_factor).unwrap_or(f64::MIN);
+    let threshold = top_threshold.max(baseline_threshold);
 
     let mut kept: Vec<&&Value> = sorted
         .iter()
@@ -231,6 +243,40 @@ fn select_kept_profilesets(
                 .map(|s| s.to_string())
         })
         .collect()
+}
+
+/// Best "current DPS" we can compare against when deciding if a combo is still
+/// plausibly an upgrade. Reads the base actor mean from `sim.players[0]`, and
+/// folds in any profilesets named like "Currently Equipped*" (multi-talent jobs
+/// emit one per non-first talent) — taking the max so we don't prune a combo
+/// that beats one baseline but not another.
+fn baseline_mean_for_pruning(raw: &Value, profilesets: &[Value]) -> Option<f64> {
+    let base = raw
+        .get("sim")
+        .and_then(|s| s.get("players"))
+        .and_then(|p| p.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|p| p.get("collected_data"))
+        .and_then(|c| c.get("dps"))
+        .and_then(|d| d.get("mean"))
+        .and_then(|m| m.as_f64());
+
+    let from_profilesets = profilesets
+        .iter()
+        .filter(|ps| {
+            ps.get("name")
+                .and_then(|n| n.as_str())
+                .is_some_and(|n| n.starts_with("Currently Equipped"))
+        })
+        .filter_map(|ps| ps.get("mean").and_then(|v| v.as_f64()))
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    match (base, from_profilesets.is_finite()) {
+        (Some(b), true) => Some(b.max(from_profilesets)),
+        (Some(b), false) => Some(b),
+        (None, true) => Some(from_profilesets),
+        (None, false) => None,
+    }
 }
 
 /// Build the full simc input from the options Value (convenience wrapper).
@@ -999,8 +1045,13 @@ pub async fn run_simc_staged(
             break;
         }
 
-        let keep_combos =
-            select_kept_profilesets(profilesets, stage.target_error, STAGE_MIN_KEEP);
+        let baseline_mean = baseline_mean_for_pruning(stage_json, profilesets);
+        let keep_combos = select_kept_profilesets(
+            profilesets,
+            stage.target_error,
+            STAGE_MIN_KEEP,
+            baseline_mean,
+        );
 
         if keep_combos.len() >= profilesets.len() {
             on_stage_complete(&format!(
@@ -1086,7 +1137,7 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty() {
-        let kept = select_kept_profilesets(&[], 1.0, 5);
+        let kept = select_kept_profilesets(&[], 1.0, 5, None);
         assert!(kept.is_empty());
     }
 
@@ -1101,7 +1152,7 @@ mod tests {
             ps("d", 979.99),
             ps("e", 950.0),
         ];
-        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        let kept = select_kept_profilesets(&pss, 1.0, 1, None);
         assert!(kept.contains("a"));
         assert!(kept.contains("b"));
         assert!(kept.contains("c"));
@@ -1119,7 +1170,7 @@ mod tests {
             ps("c", 400.0),
             ps("d", 300.0),
         ];
-        let kept = select_kept_profilesets(&pss, 0.1, 3);
+        let kept = select_kept_profilesets(&pss, 0.1, 3, None);
         assert_eq!(kept.len(), 3);
         assert!(kept.contains("a"));
         assert!(kept.contains("b"));
@@ -1131,7 +1182,7 @@ mod tests {
     fn all_tied_within_threshold_keeps_all() {
         // All within 1% of top, te = 1.0% (threshold = 98%) → everyone passes.
         let pss = vec![ps("a", 1000.0), ps("b", 995.0), ps("c", 990.0)];
-        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        let kept = select_kept_profilesets(&pss, 1.0, 1, None);
         assert_eq!(kept.len(), 3);
     }
 
@@ -1144,8 +1195,8 @@ mod tests {
             ps("c", 960.0),
             ps("d", 950.0),
         ];
-        let kept_loose = select_kept_profilesets(&pss, 2.0, 1); // threshold = 960
-        let kept_tight = select_kept_profilesets(&pss, 0.5, 1); // threshold = 990
+        let kept_loose = select_kept_profilesets(&pss, 2.0, 1, None); // threshold = 960
+        let kept_tight = select_kept_profilesets(&pss, 0.5, 1, None); // threshold = 990
         assert!(kept_loose.len() > kept_tight.len());
         assert_eq!(kept_tight.len(), 1); // only "a"
     }
@@ -1154,7 +1205,7 @@ mod tests {
     fn min_keep_capped_at_total_combos_count() {
         // min_keep larger than the input size shouldn't panic.
         let pss = vec![ps("a", 1000.0), ps("b", 500.0)];
-        let kept = select_kept_profilesets(&pss, 0.01, 999);
+        let kept = select_kept_profilesets(&pss, 0.01, 999, None);
         assert_eq!(kept.len(), 2);
     }
 
@@ -1162,7 +1213,7 @@ mod tests {
     fn unnamed_profilesets_filtered_out() {
         // A profileset missing the "name" field can't be tracked downstream.
         let pss = vec![ps("a", 1000.0), json!({ "mean": 990.0 })];
-        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        let kept = select_kept_profilesets(&pss, 1.0, 1, None);
         assert_eq!(kept.len(), 1);
         assert!(kept.contains("a"));
     }
@@ -1175,10 +1226,105 @@ mod tests {
             json!({ "name": "no_mean" }),
             ps("b", 990.0),
         ];
-        let kept = select_kept_profilesets(&pss, 1.0, 1);
+        let kept = select_kept_profilesets(&pss, 1.0, 1, None);
         assert!(kept.contains("a"));
         assert!(kept.contains("b"));
         assert!(!kept.contains("no_mean"));
+    }
+
+    // ---- baseline cutoff ----
+
+    #[test]
+    fn baseline_cutoff_prunes_likely_non_upgrades_when_top_is_close_to_baseline() {
+        // Baseline = 1000, top alt = 1005 (marginal upgrade). te = 2.0%.
+        //   top threshold     = 1005 * (1 - 0.04) =  964.8
+        //   baseline threshold = 1000 * (1 - 0.04) =  960.0
+        //   effective        = max(964.8, 960.0)  =  964.8
+        // Without baseline: "c" at 970 would survive only the top cut anyway,
+        // but adding baseline makes the cut explicit even when top tracks baseline.
+        let pss = vec![ps("a", 1005.0), ps("b", 980.0), ps("c", 970.0), ps("d", 950.0)];
+        let kept = select_kept_profilesets(&pss, 2.0, 1, Some(1000.0));
+        assert!(kept.contains("a"));
+        assert!(kept.contains("b"));
+        assert!(kept.contains("c"));
+        assert!(!kept.contains("d"));
+    }
+
+    #[test]
+    fn baseline_cutoff_drops_everything_when_no_alternatives_are_upgrades() {
+        // Baseline = 1000, all alts below baseline. te = 2.0% → baseline cutoff = 960.
+        // Top-only cutoff (top = 900) would keep "a"+"b" (within 4% of 900 = 864).
+        // Baseline cutoff (960) drops all. min_keep = 1 still tops up to 1 survivor
+        // so the runner has something to keep around for the next stage / final.
+        let pss = vec![ps("a", 900.0), ps("b", 880.0), ps("c", 850.0)];
+        let kept = select_kept_profilesets(&pss, 2.0, 1, Some(1000.0));
+        assert_eq!(kept.len(), 1);
+        assert!(kept.contains("a"));
+    }
+
+    #[test]
+    fn baseline_cutoff_only_applies_when_stricter_than_top() {
+        // Big upgrade exists: top = 1200, baseline = 1000, te = 2.0%.
+        //   top threshold     = 1200 * 0.96 = 1152
+        //   baseline threshold = 1000 * 0.96 =  960
+        //   effective        = max(1152, 960) = 1152
+        // Combo "b" at 1100 is above baseline cutoff (960) but below top cutoff
+        // (1152) — top-cutoff dominates, "b" drops.
+        let pss = vec![ps("a", 1200.0), ps("b", 1100.0), ps("c", 1050.0)];
+        let kept = select_kept_profilesets(&pss, 2.0, 1, Some(1000.0));
+        assert_eq!(kept.len(), 1);
+        assert!(kept.contains("a"));
+    }
+
+    #[test]
+    fn baseline_none_behaves_like_top_only_cutoff() {
+        // Sanity: passing None reproduces the pre-baseline behavior exactly.
+        let pss = vec![ps("a", 1000.0), ps("b", 990.0), ps("c", 950.0)];
+        let kept_none = select_kept_profilesets(&pss, 1.0, 1, None);
+        let kept_baseline_neg_inf = select_kept_profilesets(&pss, 1.0, 1, Some(f64::MIN));
+        assert_eq!(kept_none, kept_baseline_neg_inf);
+    }
+
+    // ---- baseline_mean_for_pruning ----
+
+    fn sim_with_base_actor_dps(mean: f64) -> Value {
+        json!({
+            "sim": {
+                "players": [{ "collected_data": { "dps": { "mean": mean } } }]
+            }
+        })
+    }
+
+    #[test]
+    fn baseline_reads_base_actor_dps_from_sim_output() {
+        let raw = sim_with_base_actor_dps(1000.0);
+        assert_eq!(baseline_mean_for_pruning(&raw, &[]), Some(1000.0));
+    }
+
+    #[test]
+    fn baseline_takes_max_of_base_actor_and_currently_equipped_profilesets() {
+        // Multi-talent job: base actor on talent A is 950, Currently Equipped (B)
+        // profileset is 1010. Use the larger.
+        let raw = sim_with_base_actor_dps(950.0);
+        let pss = vec![
+            ps("Currently Equipped (B)", 1010.0),
+            ps("Combo 2", 900.0),
+        ];
+        assert_eq!(baseline_mean_for_pruning(&raw, &pss), Some(1010.0));
+    }
+
+    #[test]
+    fn baseline_returns_none_when_no_player_dps_and_no_baseline_profileset() {
+        let raw = json!({ "sim": { "players": [] } });
+        let pss = vec![ps("Combo 2", 900.0)];
+        assert_eq!(baseline_mean_for_pruning(&raw, &pss), None);
+    }
+
+    #[test]
+    fn baseline_falls_back_to_currently_equipped_profileset_when_player_dps_missing() {
+        let raw = json!({ "sim": { "players": [] } });
+        let pss = vec![ps("Currently Equipped", 1000.0)];
+        assert_eq!(baseline_mean_for_pruning(&raw, &pss), Some(1000.0));
     }
 
     // ---- iterations_for_stage ----
