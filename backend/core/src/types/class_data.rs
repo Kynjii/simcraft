@@ -96,6 +96,16 @@ pub fn inventory_type_display_slot(inv_type: u64) -> &'static str {
 // All class/spec metadata lives here. The lookup functions below derive from
 // this single table instead of maintaining parallel match blocks.
 
+/// Primary attribute for a spec — drives drop filtering (e.g. a hunter spec
+/// with `PrimaryStat::Agility` rejects Strength-stat trinkets and weapons).
+/// Sourced from SimC's `convert_hybrid_stat` in `engine/class_modules/*.cpp`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PrimaryStat {
+    Strength,
+    Agility,
+    Intellect,
+}
+
 /// Per-spec metadata.
 pub struct SpecDef {
     pub name: &'static str,
@@ -108,6 +118,7 @@ pub struct SpecDef {
     pub can_dual_wield: bool,
     pub can_use_shield: bool,
     pub can_use_offhand: bool,
+    pub primary_stat: PrimaryStat,
 }
 
 /// Per-class metadata, containing its specs.
@@ -135,6 +146,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
             SpecDef {
                 name: "fury",
@@ -143,6 +155,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
             SpecDef {
                 name: "protection",
@@ -151,6 +164,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
         ],
     },
@@ -167,6 +181,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "protection",
@@ -175,6 +190,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
             SpecDef {
                 name: "retribution",
@@ -183,6 +199,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
         ],
     },
@@ -199,6 +216,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "marksmanship",
@@ -207,14 +225,18 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "survival",
                 id: 255,
-                weapon_subclasses: &[1, 5, 6, 8, 10],
+                // Hunter melee proficiencies: 2H Axe, Polearm, 2H Sword, Staff,
+                // Fist, Dagger. 2H Mace (5) removed — hunters cannot equip it.
+                weapon_subclasses: &[1, 6, 8, 10, 13, 15],
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
         ],
     },
@@ -231,6 +253,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "outlaw",
@@ -239,6 +262,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "subtlety",
@@ -247,6 +271,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
         ],
     },
@@ -263,6 +288,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "holy",
@@ -271,6 +297,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "shadow",
@@ -279,6 +306,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -295,6 +323,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
             SpecDef {
                 name: "frost",
@@ -303,6 +332,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
             SpecDef {
                 name: "unholy",
@@ -311,6 +341,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Strength,
             },
         ],
     },
@@ -327,6 +358,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "enhancement",
@@ -335,6 +367,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "restoration",
@@ -343,6 +376,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -359,6 +393,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "fire",
@@ -367,6 +402,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "frost",
@@ -375,6 +411,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -391,6 +428,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "demonology",
@@ -399,6 +437,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "destruction",
@@ -407,6 +446,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -423,6 +463,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "mistweaver",
@@ -431,6 +472,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "windwalker",
@@ -439,6 +481,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
         ],
     },
@@ -455,6 +498,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "feral",
@@ -463,6 +507,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "guardian",
@@ -471,6 +516,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "restoration",
@@ -479,6 +525,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -495,6 +542,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
             SpecDef {
                 name: "vengeance",
@@ -503,6 +551,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
+                primary_stat: PrimaryStat::Agility,
             },
         ],
     },
@@ -519,6 +568,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "preservation",
@@ -527,6 +577,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
             SpecDef {
                 name: "augmentation",
@@ -535,6 +586,7 @@ static CLASSES: &[ClassDef] = &[
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
+                primary_stat: PrimaryStat::Intellect,
             },
         ],
     },
@@ -571,6 +623,61 @@ pub fn class_allowed_weapons(class_name: &str) -> Option<&'static [u64]> {
 pub fn spec_weapon_profile(class_name: &str, spec: &str) -> Option<&'static SpecDef> {
     let class = find_class(class_name)?;
     class.specs.iter().find(|s| s.name == spec)
+}
+
+/// Decode an item's `stats` array into the set of primary stats it can
+/// satisfy. Returns `None` when the item has no primary-stat entries at all
+/// (callers should treat that as "allow" — most effect-only trinkets fall in
+/// this bucket).
+///
+/// Blizzard ItemModType IDs:
+///   3=Agility, 4=Strength, 5=Intellect
+///   71=Agi|Str|Int, 72=Agi|Str, 73=Agi|Int, 74=Str|Int
+pub fn item_primary_stats(
+    item: &serde_json::Value,
+) -> Option<std::collections::HashSet<PrimaryStat>> {
+    let stats = item.get("stats").and_then(|s| s.as_array())?;
+    let mut out = std::collections::HashSet::new();
+    for stat in stats {
+        let id = match stat.get("id").and_then(|v| v.as_u64()) {
+            Some(v) => v,
+            None => continue,
+        };
+        match id {
+            3 => {
+                out.insert(PrimaryStat::Agility);
+            }
+            4 => {
+                out.insert(PrimaryStat::Strength);
+            }
+            5 => {
+                out.insert(PrimaryStat::Intellect);
+            }
+            71 => {
+                out.insert(PrimaryStat::Strength);
+                out.insert(PrimaryStat::Agility);
+                out.insert(PrimaryStat::Intellect);
+            }
+            72 => {
+                out.insert(PrimaryStat::Strength);
+                out.insert(PrimaryStat::Agility);
+            }
+            73 => {
+                out.insert(PrimaryStat::Agility);
+                out.insert(PrimaryStat::Intellect);
+            }
+            74 => {
+                out.insert(PrimaryStat::Strength);
+                out.insert(PrimaryStat::Intellect);
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Map spec name → numeric spec ID.
@@ -744,4 +851,147 @@ pub fn title_case(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- Primary stat helper ----
+
+    #[test]
+    fn item_primary_stats_fixed_agility() {
+        let item = json!({"stats": [{"id": 3, "alloc": 5000}, {"id": 7, "alloc": 4000}]});
+        let stats = item_primary_stats(&item).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert!(stats.contains(&PrimaryStat::Agility));
+    }
+
+    #[test]
+    fn item_primary_stats_fixed_strength() {
+        let item = json!({"stats": [{"id": 4, "alloc": 5000}]});
+        let stats = item_primary_stats(&item).unwrap();
+        assert!(stats.contains(&PrimaryStat::Strength));
+        assert!(!stats.contains(&PrimaryStat::Agility));
+    }
+
+    #[test]
+    fn item_primary_stats_hybrid_all_three() {
+        let item = json!({"stats": [{"id": 71, "alloc": 5000}]});
+        let stats = item_primary_stats(&item).unwrap();
+        assert_eq!(stats.len(), 3);
+    }
+
+    #[test]
+    fn item_primary_stats_hybrid_agi_int() {
+        let item = json!({"stats": [{"id": 73, "alloc": 5000}]});
+        let stats = item_primary_stats(&item).unwrap();
+        assert!(stats.contains(&PrimaryStat::Agility));
+        assert!(stats.contains(&PrimaryStat::Intellect));
+        assert!(!stats.contains(&PrimaryStat::Strength));
+    }
+
+    #[test]
+    fn item_primary_stats_no_primary_returns_none() {
+        // Only stamina + secondaries — effect-only trinkets often look like this
+        let item = json!({"stats": [{"id": 7, "alloc": 5000}, {"id": 32, "alloc": 3000}]});
+        assert!(item_primary_stats(&item).is_none());
+    }
+
+    #[test]
+    fn item_primary_stats_missing_stats_array_returns_none() {
+        let item = json!({"item_id": 12345});
+        assert!(item_primary_stats(&item).is_none());
+    }
+
+    // ---- Spec primary stat table ----
+
+    #[test]
+    fn all_hunter_specs_are_agility() {
+        for spec in &["beast_mastery", "marksmanship", "survival"] {
+            let p = spec_weapon_profile("hunter", spec).expect(spec);
+            assert_eq!(p.primary_stat, PrimaryStat::Agility, "spec {spec}");
+        }
+    }
+
+    #[test]
+    fn holy_paladin_is_intellect_others_strength() {
+        assert_eq!(
+            spec_weapon_profile("paladin", "holy").unwrap().primary_stat,
+            PrimaryStat::Intellect
+        );
+        for spec in &["protection", "retribution"] {
+            assert_eq!(
+                spec_weapon_profile("paladin", spec).unwrap().primary_stat,
+                PrimaryStat::Strength,
+                "spec {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn shaman_enhancement_is_agility_others_intellect() {
+        assert_eq!(
+            spec_weapon_profile("shaman", "enhancement").unwrap().primary_stat,
+            PrimaryStat::Agility
+        );
+        for spec in &["elemental", "restoration"] {
+            assert_eq!(
+                spec_weapon_profile("shaman", spec).unwrap().primary_stat,
+                PrimaryStat::Intellect,
+                "spec {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn monk_mistweaver_is_intellect() {
+        assert_eq!(
+            spec_weapon_profile("monk", "mistweaver").unwrap().primary_stat,
+            PrimaryStat::Intellect
+        );
+        for spec in &["brewmaster", "windwalker"] {
+            assert_eq!(
+                spec_weapon_profile("monk", spec).unwrap().primary_stat,
+                PrimaryStat::Agility,
+                "spec {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn druid_caster_specs_are_intellect_melee_agility() {
+        assert_eq!(
+            spec_weapon_profile("druid", "balance").unwrap().primary_stat,
+            PrimaryStat::Intellect
+        );
+        assert_eq!(
+            spec_weapon_profile("druid", "restoration").unwrap().primary_stat,
+            PrimaryStat::Intellect
+        );
+        assert_eq!(
+            spec_weapon_profile("druid", "feral").unwrap().primary_stat,
+            PrimaryStat::Agility
+        );
+        assert_eq!(
+            spec_weapon_profile("druid", "guardian").unwrap().primary_stat,
+            PrimaryStat::Agility
+        );
+    }
+
+    // ---- SV hunter weapon list ----
+
+    #[test]
+    fn survival_includes_daggers_and_excludes_two_hand_mace() {
+        let sv = spec_weapon_profile("hunter", "survival").unwrap();
+        assert!(
+            sv.weapon_subclasses.contains(&15),
+            "SV should allow daggers (15) — user reported them missing"
+        );
+        assert!(
+            !sv.weapon_subclasses.contains(&5),
+            "SV should NOT allow 2H mace (5) — hunters cannot equip it"
+        );
+    }
 }

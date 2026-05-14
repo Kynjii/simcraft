@@ -174,6 +174,25 @@ pub fn get_instance_drops(
                     }
                 }
 
+                // Filter by primary stat — rejects items whose fixed primary
+                // stat (e.g. Strength) cannot serve any active spec. Items
+                // without primary-stat entries (most cosmetics, some
+                // effect-only trinkets) are passed through.
+                if let (Some(cn), Some(item_stats)) =
+                    (class_name, class_data::item_primary_stats(item))
+                {
+                    if !active_spec_names.is_empty() {
+                        let any_spec_stat_match = active_spec_names.iter().any(|spec| {
+                            class_data::spec_weapon_profile(cn, spec)
+                                .map(|p| item_stats.contains(&p.primary_stat))
+                                .unwrap_or(true)
+                        });
+                        if !any_spec_stat_match {
+                            continue;
+                        }
+                    }
+                }
+
                 // Filter spec restrictions (items with explicit spec lists)
                 if let Some(specs) = item.get("specs").and_then(|s| s.as_array()) {
                     if !allowed_specs.is_empty() {
