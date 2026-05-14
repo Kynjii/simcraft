@@ -131,17 +131,46 @@ struct Stage {
     target_error: f64,
 }
 
-/// Adaptive precision schedule. Each entry runs a SimC pass at its `target_error`.
-/// The final entry is the user-visible precision and is never pruned. Intermediate
-/// stages prune to `STAGE_CUTOFF_MULTIPLIER * target_error` of the top mean.
-const STAGES: &[Stage] = &[
-    Stage { name: "Probe",   target_error: 2.0  },
-    Stage { name: "Coarse",  target_error: 1.0  },
-    Stage { name: "Refine",  target_error: 0.5  },
-    Stage { name: "Medium",  target_error: 0.2  },
-    Stage { name: "Fine",    target_error: 0.1  },
-    Stage { name: "Final",   target_error: 0.05 },
+/// Coarse-to-fine candidate target_errors used to construct the adaptive schedule.
+/// Each entry produces an intermediate stage when its target_error is strictly
+/// looser than the user's requested precision. Names are paired by position so
+/// log output stays consistent across runs at different user precisions.
+const STAGE_CANDIDATES: &[(f64, &str)] = &[
+    (2.0,  "Probe"),
+    (1.0,  "Coarse"),
+    (0.5,  "Refine"),
+    (0.2,  "Medium"),
+    (0.1,  "Fine"),
+    (0.05, "Trace"),
+    (0.02, "Ultra"),
 ];
+
+/// Build the staged schedule for the user's requested `target_error`.
+///
+/// Keeps every candidate stage looser than `user_target_error`, then appends a
+/// "Final" stage at the user's exact precision. Stages pass profilesets through
+/// progressively tighter SimC passes; intermediate stages prune via
+/// `STAGE_CUTOFF_MULTIPLIER * target_error` of the top (and baseline) mean.
+///
+/// Examples:
+///   0.2  -> Probe, Coarse, Refine, Final(0.2)         (4 stages)
+///   0.05 -> Probe, Coarse, Refine, Medium, Fine, Final(0.05)   (6 stages)
+///   0.01 -> ..., Trace, Ultra, Final(0.01)            (8 stages)
+fn build_stage_schedule(user_target_error: f64) -> Vec<Stage> {
+    let mut schedule: Vec<Stage> = STAGE_CANDIDATES
+        .iter()
+        .filter(|(te, _)| *te > user_target_error)
+        .map(|(te, name)| Stage {
+            name,
+            target_error: *te,
+        })
+        .collect();
+    schedule.push(Stage {
+        name: "Final",
+        target_error: user_target_error,
+    });
+    schedule
+}
 
 /// Below this combo count, skip staging and run a single direct sim. The 6-stage
 /// schedule needs enough combos for pruning to amortize the per-stage subprocess
@@ -976,12 +1005,17 @@ pub async fn run_simc_staged(
     // Key: combo name, Value: profileset result object from the stage where it was cut.
     let mut eliminated: HashMap<String, Value> = HashMap::new();
 
-    let total_stages = STAGES.len();
+    let user_target_error = options
+        .get("target_error")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.05);
+    let stages = build_stage_schedule(user_target_error);
+    let total_stages = stages.len();
     let final_idx = total_stages - 1;
     let mut stage_idx = 0;
 
     while stage_idx < total_stages {
-        let stage = &STAGES[stage_idx];
+        let stage = &stages[stage_idx];
         let is_final = stage_idx == final_idx;
         let (range_start, range_end) = progress_range_for_stage(stage_idx, total_stages);
         let stage_iters = iterations_for_stage(stage_idx, total_stages, user_iterations);
@@ -1383,25 +1417,82 @@ mod tests {
 
     // ---- staged schedule sanity ----
 
+    fn schedule_targets(user_te: f64) -> Vec<f64> {
+        build_stage_schedule(user_te)
+            .into_iter()
+            .map(|s| s.target_error)
+            .collect()
+    }
+
     #[test]
-    fn staged_schedule_targets_decrease_monotonically() {
-        // Each stage must be at least as precise as the previous (te ≤ previous te).
-        let mut prev = f64::INFINITY;
-        for stage in STAGES {
-            assert!(
-                stage.target_error <= prev,
-                "stage {} target_error {} > previous {}",
-                stage.name,
-                stage.target_error,
-                prev
-            );
-            prev = stage.target_error;
+    fn schedule_targets_decrease_monotonically_at_every_user_precision() {
+        for user_te in [2.5, 1.0, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005] {
+            let stages = build_stage_schedule(user_te);
+            let mut prev = f64::INFINITY;
+            for stage in &stages {
+                assert!(
+                    stage.target_error <= prev,
+                    "user_te={user_te}: stage {} target_error {} > previous {}",
+                    stage.name,
+                    stage.target_error,
+                    prev
+                );
+                prev = stage.target_error;
+            }
         }
     }
 
     #[test]
-    fn staged_schedule_final_is_005_percent() {
-        let final_stage = STAGES.last().unwrap();
-        assert_eq!(final_stage.target_error, 0.05);
+    fn schedule_final_stage_is_user_target_error() {
+        for user_te in [2.5, 0.5, 0.2, 0.05, 0.01, 0.005] {
+            let stages = build_stage_schedule(user_te);
+            let last = stages.last().expect("schedule must be non-empty");
+            assert_eq!(last.name, "Final");
+            assert!(
+                (last.target_error - user_te).abs() < f64::EPSILON,
+                "user_te={user_te}: final stage target_error was {}",
+                last.target_error
+            );
+        }
+    }
+
+    #[test]
+    fn schedule_at_005_matches_legacy_six_stage_schedule() {
+        // Lock the existing production schedule so this refactor is a no-op
+        // for the default user precision.
+        assert_eq!(schedule_targets(0.05), vec![2.0, 1.0, 0.5, 0.2, 0.1, 0.05]);
+    }
+
+    #[test]
+    fn schedule_drops_intermediate_stages_tighter_than_user_precision() {
+        // user_te=0.2 should not run a 0.1/0.05 intermediate pass — those would
+        // be more precise than the user asked for.
+        assert_eq!(schedule_targets(0.2), vec![2.0, 1.0, 0.5, 0.2]);
+        assert_eq!(schedule_targets(0.5), vec![2.0, 1.0, 0.5]);
+        assert_eq!(schedule_targets(1.0), vec![2.0, 1.0]);
+    }
+
+    #[test]
+    fn schedule_extends_with_extra_intermediates_for_tighter_user_precision() {
+        // user_te=0.01 grows the schedule past the legacy 0.05 floor.
+        assert_eq!(
+            schedule_targets(0.01),
+            vec![2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+        );
+    }
+
+    #[test]
+    fn schedule_handles_user_target_error_between_candidate_stops() {
+        // 0.3 doesn't match a candidate — keeps stages > 0.3 and appends Final(0.3).
+        assert_eq!(schedule_targets(0.3), vec![2.0, 1.0, 0.5, 0.3]);
+    }
+
+    #[test]
+    fn schedule_at_very_loose_user_precision_collapses_to_single_final_stage() {
+        // user_te=3.0 has no looser candidates — runs a single Final pass.
+        let stages = build_stage_schedule(3.0);
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].name, "Final");
+        assert_eq!(stages[0].target_error, 3.0);
     }
 }
