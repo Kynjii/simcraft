@@ -104,8 +104,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
@@ -121,7 +121,7 @@ jobs:
 
   deploy-stable:
     needs: merge
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     env:
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
@@ -154,7 +154,7 @@ jobs:
 
   deploy-dev:
     needs: merge
-    if: github.ref == 'refs/heads/dev'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
