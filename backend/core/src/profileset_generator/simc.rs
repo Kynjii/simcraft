@@ -1,18 +1,9 @@
-use once_cell::sync::Lazy;
-use regex::Regex;
+pub(super) use crate::simc_string::{
+    extract_bonus_ids, extract_enchant_id, extract_gem_id, extract_item_id, set_enchant_id,
+    set_gem_id,
+};
 
 const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-// Compiled once at first use. Each of these is referenced from hot loops that
-// previously re-compiled the regex on every call.
-static ENCHANT_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"enchant_id=\d+").unwrap());
-static ENCHANT_ID_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"enchant_id=(\d+)").unwrap());
-static GEM_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"gem_id=\d+").unwrap());
-static GEM_ID_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"gem_id=(\d+)").unwrap());
-static ITEM_ID_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"id=(\d+)").unwrap());
-static AFTER_ITEM_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(,id=\d+)").unwrap());
-static BONUS_ID_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"bonus_id=([0-9/:]+)").unwrap());
 
 pub(super) fn extract_spec_id_from_talent_string(talent_str: &str) -> Option<u64> {
     let mut bits = Vec::new();
@@ -37,37 +28,6 @@ pub(super) fn extract_spec_id_from_talent_string(talent_str: &str) -> Option<u64
     Some(spec_id)
 }
 
-pub(super) fn set_enchant_id(simc: &str, enchant_id: u64) -> String {
-    if ENCHANT_ID_RE.is_match(simc) {
-        ENCHANT_ID_RE
-            .replace(simc, &format!("enchant_id={}", enchant_id))
-            .to_string()
-    } else {
-        AFTER_ITEM_ID_RE
-            .replace(simc, &format!("$1,enchant_id={}", enchant_id))
-            .to_string()
-    }
-}
-
-pub(super) fn set_gem_id(simc: &str, gem_id: u64) -> String {
-    if GEM_ID_RE.is_match(simc) {
-        GEM_ID_RE
-            .replace(simc, &format!("gem_id={}", gem_id))
-            .to_string()
-    } else {
-        AFTER_ITEM_ID_RE
-            .replace(simc, &format!("$1,gem_id={}", gem_id))
-            .to_string()
-    }
-}
-
-pub(super) fn extract_enchant_id(simc: &str) -> u64 {
-    ENCHANT_ID_CAPTURE_RE
-        .captures(simc)
-        .and_then(|c| c[1].parse().ok())
-        .unwrap_or(0)
-}
-
 pub(super) fn combinations<T: Clone>(items: &[T], k: usize) -> Vec<Vec<T>> {
     if k == 0 {
         return vec![vec![]];
@@ -90,14 +50,7 @@ pub(super) fn simc_has_socket(simc: &str) -> bool {
     if extract_gem_id(simc) > 0 {
         return true;
     }
-    let bonus_ids: Vec<u64> = BONUS_ID_CAPTURE_RE
-        .captures(simc)
-        .map(|c| {
-            c[1].split(&['/', ':'][..])
-                .filter_map(|s| s.parse().ok())
-                .collect()
-        })
-        .unwrap_or_default();
+    let bonus_ids = extract_bonus_ids(simc);
     let resolved = crate::item_db::resolve_bonuses(&bonus_ids);
     resolved.sockets.unwrap_or(0) > 0
 }
@@ -117,20 +70,6 @@ pub(super) fn gem_color(gem_item_id: u64) -> Option<String> {
         .and_then(|v| v.get("algariColor"))
         .and_then(|c| c.as_str())
         .map(|s| s.to_string())
-}
-
-pub(super) fn extract_item_id(simc: &str) -> u64 {
-    ITEM_ID_CAPTURE_RE
-        .captures(simc)
-        .and_then(|c| c[1].parse().ok())
-        .unwrap_or(0)
-}
-
-pub(super) fn extract_gem_id(simc: &str) -> u64 {
-    GEM_ID_CAPTURE_RE
-        .captures(simc)
-        .and_then(|c| c[1].parse().ok())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

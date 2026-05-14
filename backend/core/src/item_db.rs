@@ -1284,8 +1284,6 @@ pub fn upgrade_items_by_slot(
 pub fn apply_copy_enchants(
     items_by_slot: &HashMap<String, Vec<Value>>,
 ) -> HashMap<String, Vec<Value>> {
-    let re = regex::Regex::new(r"enchant_id=\d+").unwrap();
-    let id_re = regex::Regex::new(r"(,id=\d+)").unwrap();
     let mut result = HashMap::new();
 
     for (slot, slot_items) in items_by_slot {
@@ -1319,15 +1317,8 @@ pub fn apply_copy_enchants(
                 let mut updated = item.clone();
                 updated["enchant_id"] = serde_json::json!(ench_id);
                 if let Some(simc) = item.get("simc_string").and_then(|s| s.as_str()) {
-                    let new_simc = if re.is_match(simc) {
-                        re.replace(simc, &format!("enchant_id={}", ench_id))
-                            .to_string()
-                    } else {
-                        id_re
-                            .replace(simc, &format!("$1,enchant_id={}", ench_id))
-                            .to_string()
-                    };
-                    updated["simc_string"] = serde_json::json!(new_simc);
+                    updated["simc_string"] =
+                        serde_json::json!(crate::simc_string::set_enchant_id(simc, ench_id));
                 }
                 updated
             })

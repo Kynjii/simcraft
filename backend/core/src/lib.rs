@@ -9,6 +9,7 @@ pub mod profileset_generator;
 pub mod result_parser;
 pub mod server;
 pub mod simc_runner;
+pub mod simc_string;
 pub mod talent_normalize;
 pub mod types;
 

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Runs profileset generator unit tests before each commit.
+# Skip with `git commit --no-verify` in an emergency.
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)/backend"
+
+echo "Running backend unit tests..."
+if ! cargo test -p simhammer-core --lib --quiet 2>&1; then
+    echo ""
+    echo "FAIL: backend unit tests failed. Commit aborted."
+    echo "Run 'cd backend && cargo test -p simhammer-core --lib' to debug."
+    exit 1
+fi
+
+echo "OK: tests passed."

@@ -1,12 +1,9 @@
-use once_cell::sync::Lazy;
-use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::base_profile::{item_meta, parse_base_profile};
 
-static STRIP_GEM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",?gem_id=\d+").unwrap());
 use super::constraints::{
     gear_set_identity_key, main_hand_is_two_hand, validate_catalyst_constraint,
     validate_item_limits, validate_unique_equipped, validate_vault_constraint,
@@ -709,7 +706,7 @@ pub fn generate_top_gear_input_with_talents(
         let already_gemmed = extract_gem_id(simc) > 0;
 
         let mut result = if replace_gems && has_socket {
-            STRIP_GEM_RE.replace(simc, "").to_string()
+            crate::simc_string::strip_gem_id(simc)
         } else {
             simc.to_string()
         };
