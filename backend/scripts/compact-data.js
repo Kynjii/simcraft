@@ -29,21 +29,14 @@ const MANIFEST = {
     custom: true,
   },
 
-  // Enchantments — keep fields used for enchant/gem lookups
-  "enchantments.json": {
-    fields: [
-      "id", "displayName", "itemId", "itemName", "itemIcon",
-      "spellIcon", "quality", "expansion", "slot", "inventoryType",
-      "equipRequirements", "craftingQuality", "algariColor", "stats",
-    ],
-  },
+  // Enchantments — minify only. Field-stripping saved ~50 KB and was a silent-
+  // failure footgun whenever the Rust runtime started reading a new field.
+  "enchantments.json": null,
 
-  // Bonuses — object keyed by bonus ID. Keep fields used for resolution.
-  "bonuses.json": {
-    fields: [
-      "id", "quality", "itemLevel", "levelOffset", "tag", "socket", "upgrade",
-    ],
-  },
+  // Bonuses — minify only (see enchantments.json note). The `item_limit_category`
+  // field is load-bearing for embellishment validation; stripping it once silently
+  // disabled the max-2 embellishments rule across web and desktop releases.
+  "bonuses.json": null,
 
   // Upgrade track data — small file, keep as-is
   "bonus-upgrade-sets.json": null,
@@ -72,13 +65,8 @@ const MANIFEST = {
   // Item curves for ilevel conversion — keep as-is
   "item-curves.json": null,
 
-  // Encounter items — curated drop data for Drop Finder
-  "encounter-items.json": {
-    fields: [
-      "id", "name", "icon", "quality", "itemClass", "itemSubClass",
-      "inventoryType", "itemLevel", "sources", "specs", "expansion",
-    ],
-  },
+  // Encounter items — minify only (see enchantments.json note).
+  "encounter-items.json": null,
 
   // Localized item names — strip to only equippable item IDs
   "item-names.json": { custom: true, handler: "itemNames" },

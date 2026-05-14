@@ -24,10 +24,21 @@ pub(crate) mod test_support {
     /// Loads the compacted game-data fixtures used by tests that exercise
     /// item_db lookups (bonuses, gems, enchants). Idempotent across the test
     /// process — call from any test that needs real game data.
+    ///
+    /// Tests intentionally load from the **compacted** output rather than the
+    /// raw Raidbots data, so that regressions in `scripts/compact-data.js` (e.g.
+    /// stripping a field the runtime needs) surface as failing tests instead of
+    /// silent production bugs.
     pub(crate) fn ensure_game_data_loaded() {
         LOAD_GAME_DATA.call_once(|| {
             let data_dir =
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/data-compacted");
+            assert!(
+                data_dir.join("bonuses.json").exists(),
+                "missing test fixture {}/bonuses.json — run `node backend/scripts/compact-data.js \
+                 backend/resources/data backend/resources/data-compacted` first",
+                data_dir.display()
+            );
             crate::item_db::load(&data_dir);
         });
     }

@@ -35,6 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -44,3 +48,25 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Tests load from data-compacted/ so manifest drift in compact-data.js
+      # (e.g. dropping a field the runtime reads) surfaces as a test failure
+      # instead of a silent prod bug.
+      - name: Fetch game data
+        shell: bash
+        working-directory: .
+        run: |
+          mkdir -p backend/resources/data
+          cd backend/resources/data
+          curl -sL -o metadata.json https://www.raidbots.com/static/data/live/metadata.json
+          for f in $(node -e "const m=require('./metadata.json'); m.files.forEach(f=>console.log(f))"); do
+            curl -sL -o "$f" "https://www.raidbots.com/static/data/live/$f"
+          done
+          cp ../../core/season-config.json ./season-config.json 2>/dev/null || true
+
+      - name: Compact game data
+        working-directory: .
+        run: node backend/scripts/compact-data.js backend/resources/data backend/resources/data-compacted
+
+      - name: Test
+        run: cargo test --all-features

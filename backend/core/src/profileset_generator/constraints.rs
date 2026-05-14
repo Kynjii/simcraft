@@ -213,6 +213,35 @@ mod tests {
     }
 
     #[test]
+    fn embellishment_limit_rejects_three_embellished_items() {
+        // Guards against the compaction script dropping `item_limit_category` from
+        // bonuses.json (which silently disabled embellishment validation on web).
+        ensure_game_data_loaded();
+        let emb1 = TestItem::new(1).bonus_ids(vec![8960]).build();
+        let emb2 = TestItem::new(2).bonus_ids(vec![8960]).build();
+        let emb3 = TestItem::new(3).bonus_ids(vec![8960]).build();
+        let mut gs = HashMap::new();
+        gs.insert("neck".to_string(), emb1);
+        gs.insert("finger1".to_string(), emb2);
+        gs.insert("main_hand".to_string(), emb3);
+        assert!(
+            !validate_item_limits(&gs),
+            "three items with embellishment bonus 8960 must violate the max-2 limit"
+        );
+    }
+
+    #[test]
+    fn embellishment_limit_allows_two_embellished_items() {
+        ensure_game_data_loaded();
+        let emb1 = TestItem::new(1).bonus_ids(vec![8960]).build();
+        let emb2 = TestItem::new(2).bonus_ids(vec![8960]).build();
+        let mut gs = HashMap::new();
+        gs.insert("finger1".to_string(), emb1);
+        gs.insert("main_hand".to_string(), emb2);
+        assert!(validate_item_limits(&gs));
+    }
+
+    #[test]
     fn vault_constraint_passes_with_zero_vault_items() {
         let mut gs = HashMap::new();
         gs.insert("head".to_string(), item(1));
