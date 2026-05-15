@@ -1,5 +1,29 @@
 const http = require("http");
+const net = require("net");
 const { spawn } = require("child_process");
+
+/// Find a free TCP port on 127.0.0.1, preferring `preferred` for firewall/UX
+/// continuity. If it's held (e.g. an orphan backend from a previous crash) we
+/// ask the kernel for any free ephemeral port via bind(0) instead of trying
+/// to clean up the orphan.
+async function findFreePort(preferred) {
+  const tryListen = (port) =>
+    new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        const actual = server.address().port;
+        server.close(() => resolve(actual));
+      });
+    });
+
+  try {
+    return await tryListen(preferred);
+  } catch {
+    // Preferred port held — let the OS pick any ephemeral port.
+    return tryListen(0);
+  }
+}
 
 function createBackendController(config) {
   let backend = null;
@@ -47,6 +71,14 @@ function createBackendController(config) {
 
     return new Promise((resolve, reject) => {
       function check() {
+        // Fail fast if the process we spawned has already exited — otherwise
+        // we could keep polling and accidentally resolve against an unrelated
+        // server holding the port.
+        if (backend && backend.exitCode !== null) {
+          reject(new Error(`Backend exited with code ${backend.exitCode} before becoming ready`));
+          return;
+        }
+
         if (Date.now() - startTime > timeout) {
           reject(new Error("Backend did not start in time"));
           return;
@@ -87,4 +119,5 @@ function createBackendController(config) {
 
 module.exports = {
   createBackendController,
+  findFreePort,
 };

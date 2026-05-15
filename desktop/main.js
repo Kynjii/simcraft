@@ -1,6 +1,6 @@
-const { app, BrowserWindow, clipboard, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require("electron");
 
-const { createBackendController } = require("./src/main/backend");
+const { createBackendController, findFreePort } = require("./src/main/backend");
 const { clearCacheIfVersionChanged } = require("./src/main/cache");
 const { createClipboardController } = require("./src/main/clipboard");
 const { createAppConfig } = require("./src/main/config");
@@ -8,6 +8,14 @@ const { createSettingsStore } = require("./src/main/settings");
 const { createSimcController } = require("./src/main/simc");
 const { setupAutoUpdater } = require("./src/main/updater");
 const { createWindowController } = require("./src/main/window");
+
+// Prevent a second instance from launching with the same user-data directory
+// and SimC binary path. If the user double-clicks the app icon while it's
+// already running, focus the existing window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
 
 const config = createAppConfig(app);
 const settingsStore = createSettingsStore(app, config.isDev);
@@ -29,6 +37,14 @@ windowController.registerIpcHandlers();
 clipboardController.registerIpcHandlers();
 simcController.registerIpcHandlers();
 
+app.on("second-instance", () => {
+  const win = windowController.getMainWindow();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
 ipcMain.handle("settings:get", (_event, key, defaultValue) =>
   settingsStore.getSetting(key, defaultValue)
 );
@@ -41,12 +57,25 @@ app.whenReady().then(async () => {
   await simcController.ensureReady();
   await simcController.autoUpdateInstalledVersion();
 
+  // Pick a port before spawning. Tries 17384 first; falls back to an
+  // OS-chosen ephemeral port if it's held (e.g. by an orphan backend
+  // from a previous crash that didn't get cleaned up).
+  const port = await findFreePort(config.DEFAULT_BACKEND_PORT);
+  config.setBackendPort(port);
+  if (port !== config.DEFAULT_BACKEND_PORT) {
+    console.log(`Backend port ${config.DEFAULT_BACKEND_PORT} in use, using ${port} instead`);
+  }
+
   backendController.start();
 
   try {
     await backendController.waitForReady();
   } catch (err) {
     console.error(err.message);
+    dialog.showErrorBox(
+      "SimHammer",
+      `The backend failed to start.\n\n${err.message}\n\nIf this keeps happening, restart your computer or report the issue on GitHub.`
+    );
     app.quit();
     return;
   }

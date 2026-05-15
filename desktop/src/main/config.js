@@ -1,9 +1,13 @@
 const path = require("path");
 
-const BACKEND_PORT = 17384;
+// Preferred port — we try this first on startup. If it's held (e.g. by an
+// orphan backend from a previous crash) we fall back to an OS-chosen
+// ephemeral port. See findFreePort() in backend.js.
+const DEFAULT_BACKEND_PORT = 17384;
 
 function createAppConfig(app) {
   const isDev = !app.isPackaged;
+  let backendPort = DEFAULT_BACKEND_PORT;
 
   function getSimcDir() {
     if (isDev) {
@@ -35,7 +39,7 @@ function createAppConfig(app) {
     if (isDev) {
       return "http://localhost:3000";
     }
-    return `http://127.0.0.1:${BACKEND_PORT}`;
+    return `http://127.0.0.1:${backendPort}`;
   }
 
   function isLocalUrl(url) {
@@ -43,7 +47,13 @@ function createAppConfig(app) {
   }
 
   return {
-    BACKEND_PORT,
+    get BACKEND_PORT() {
+      return backendPort;
+    },
+    setBackendPort(port) {
+      backendPort = port;
+    },
+    DEFAULT_BACKEND_PORT,
     isDev,
     getBackendBinary,
     getFrontendUrl,
@@ -55,6 +65,6 @@ function createAppConfig(app) {
 }
 
 module.exports = {
-  BACKEND_PORT,
+  DEFAULT_BACKEND_PORT,
   createAppConfig,
 };
