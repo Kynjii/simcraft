@@ -177,7 +177,9 @@ static CLASSES: &[ClassDef] = &[
             SpecDef {
                 name: "holy",
                 id: 65,
-                weapon_subclasses: &[4, 5, 6, 7, 8],
+                // Paladin can equip 1H Axe (0) and 2H Axe (1) class-wide;
+                // they were missing here alongside the other 2H types.
+                weapon_subclasses: &[0, 1, 4, 5, 6, 7, 8],
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: true,
@@ -186,7 +188,8 @@ static CLASSES: &[ClassDef] = &[
             SpecDef {
                 name: "protection",
                 id: 66,
-                weapon_subclasses: &[0, 4, 7, 13],
+                // Paladins cannot equip fist weapons (13) — removed.
+                weapon_subclasses: &[0, 4, 7],
                 can_dual_wield: false,
                 can_use_shield: true,
                 can_use_offhand: false,
@@ -468,7 +471,8 @@ static CLASSES: &[ClassDef] = &[
             SpecDef {
                 name: "mistweaver",
                 id: 270,
-                weapon_subclasses: &[4, 7, 10, 13],
+                // Monks can equip 1H Axes (0) class-wide — was missing.
+                weapon_subclasses: &[0, 4, 7, 10, 13],
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
@@ -477,7 +481,9 @@ static CLASSES: &[ClassDef] = &[
             SpecDef {
                 name: "windwalker",
                 id: 269,
-                weapon_subclasses: &[0, 4, 7, 13],
+                // WW can also wield Polearm (6) and Staff (10) — matches
+                // Brewmaster's list (monks share these proficiencies).
+                weapon_subclasses: &[0, 4, 6, 7, 10, 13],
                 can_dual_wield: true,
                 can_use_shield: false,
                 can_use_offhand: false,
@@ -521,7 +527,9 @@ static CLASSES: &[ClassDef] = &[
             SpecDef {
                 name: "restoration",
                 id: 105,
-                weapon_subclasses: &[4, 5, 10, 13, 15],
+                // Polearm (6) is a druid class proficiency — the other three
+                // druid specs include it; Resto was missing it.
+                weapon_subclasses: &[4, 5, 6, 10, 13, 15],
                 can_dual_wield: false,
                 can_use_shield: false,
                 can_use_offhand: true,
@@ -980,7 +988,7 @@ mod tests {
         );
     }
 
-    // ---- SV hunter weapon list ----
+    // ---- weapon proficiency corrections ----
 
     #[test]
     fn survival_includes_daggers_and_excludes_two_hand_mace() {
@@ -993,5 +1001,58 @@ mod tests {
             !sv.weapon_subclasses.contains(&5),
             "SV should NOT allow 2H mace (5) — hunters cannot equip it"
         );
+    }
+
+    #[test]
+    fn holy_paladin_includes_axes() {
+        // Paladins can equip 1H and 2H Axes class-wide. The Holy spec list was
+        // missing both even though it included the other 2H weapon types.
+        let p = spec_weapon_profile("paladin", "holy").unwrap();
+        assert!(p.weapon_subclasses.contains(&0), "Holy paladin should allow 1H Axe (0)");
+        assert!(p.weapon_subclasses.contains(&1), "Holy paladin should allow 2H Axe (1)");
+    }
+
+    #[test]
+    fn protection_paladin_excludes_fist_weapons() {
+        // Paladins cannot equip fist weapons class-wide.
+        let p = spec_weapon_profile("paladin", "protection").unwrap();
+        assert!(
+            !p.weapon_subclasses.contains(&13),
+            "Prot paladin should NOT allow fist weapons (13)"
+        );
+    }
+
+    #[test]
+    fn mistweaver_includes_one_hand_axe() {
+        // Monks can equip 1H Axes class-wide; Mistweaver was missing it
+        // (Brewmaster and Windwalker had it).
+        let p = spec_weapon_profile("monk", "mistweaver").unwrap();
+        assert!(p.weapon_subclasses.contains(&0), "Mistweaver should allow 1H Axe (0)");
+    }
+
+    #[test]
+    fn windwalker_includes_polearm_and_staff() {
+        // Brewmaster has both; Windwalker shares monk class proficiencies.
+        let p = spec_weapon_profile("monk", "windwalker").unwrap();
+        assert!(p.weapon_subclasses.contains(&6), "WW should allow Polearm (6)");
+        assert!(p.weapon_subclasses.contains(&10), "WW should allow Staff (10)");
+    }
+
+    #[test]
+    fn restoration_druid_includes_polearm() {
+        // Druids' three other specs (Balance/Feral/Guardian) include Polearm.
+        // Resto was missing it.
+        let p = spec_weapon_profile("druid", "restoration").unwrap();
+        assert!(p.weapon_subclasses.contains(&6), "Resto druid should allow Polearm (6)");
+    }
+
+    #[test]
+    fn enhancement_shaman_excludes_two_hand_and_staff() {
+        // Enhancement is locked to 1H dual-wield in retail — no 2H spec talent
+        // currently exists. Staff and 2H weapons are correctly excluded.
+        let p = spec_weapon_profile("shaman", "enhancement").unwrap();
+        assert!(!p.weapon_subclasses.contains(&1), "Enh should NOT allow 2H Axe (1)");
+        assert!(!p.weapon_subclasses.contains(&5), "Enh should NOT allow 2H Mace (5)");
+        assert!(!p.weapon_subclasses.contains(&10), "Enh should NOT allow Staff (10)");
     }
 }
