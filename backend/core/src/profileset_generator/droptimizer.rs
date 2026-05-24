@@ -3,7 +3,59 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use super::base_profile::parse_base_profile;
+use super::constraints::{is_legal_gear_set, GearSetContext};
+use crate::simc_string::{extract_bonus_ids, extract_item_id};
 use crate::types::class_data::{self, GEAR_SLOTS};
+
+/// Validate that placing `drop_item_id` (with `drop_bonus_ids`) in `target_slot`
+/// — while every other slot keeps its equipped item — yields a legal gear set
+/// under the shared `is_legal_gear_set` rules. False = skip the combo; the
+/// user can still see the comparison via the combo for the slot that holds
+/// the conflicting copy (which gets replaced, not duplicated).
+///
+/// Mirrors the profileset-emission normalization where a 2H drop in main_hand
+/// for non-Fury clears the off_hand — the candidate gear set must match the
+/// gear set simc actually receives, or the weapon-pairing check would flag a
+/// state that doesn't exist in the emitted profileset.
+fn drop_combo_is_valid(
+    equipped: &HashMap<String, String>,
+    target_slot: &str,
+    drop_item_id: u64,
+    drop_bonus_ids: &[u64],
+    drop_inv_type: u64,
+    spec: &str,
+) -> bool {
+    let mut candidate: HashMap<String, Value> = HashMap::with_capacity(GEAR_SLOTS.len());
+    for slot in GEAR_SLOTS {
+        if *slot == target_slot {
+            candidate.insert(
+                slot.to_string(),
+                json!({
+                    "item_id": drop_item_id,
+                    "bonus_ids": drop_bonus_ids,
+                }),
+            );
+        } else if let Some(eq) = equipped.get(*slot) {
+            candidate.insert(
+                slot.to_string(),
+                json!({
+                    "item_id": extract_item_id(eq),
+                    "bonus_ids": extract_bonus_ids(eq),
+                }),
+            );
+        }
+    }
+    if target_slot == "main_hand" && drop_inv_type == 17 && spec != "fury" {
+        candidate.remove("off_hand");
+    }
+    is_legal_gear_set(
+        &candidate,
+        &GearSetContext {
+            spec,
+            max_catalyst_charges: None,
+        },
+    )
+}
 
 pub(super) fn generate_droptimizer_input(
     base_profile: &str,
@@ -85,6 +137,20 @@ pub(super) fn generate_droptimizer_input(
         }
 
         for slot in &slots {
+            // Validate the gear set this combo would produce against the same
+            // unique-equipped + item-limit-category rules Top Gear enforces.
+            // Two checks fall out:
+            //   - Same item_id in both paired slots (rings/trinkets) → drop
+            //     in the unequipped slot would duplicate the equipped copy.
+            //   - A bonus-id item-limit category exceeded → e.g. "max 1 of
+            //     this trinket type" hit because the equipped slot we're
+            //     *not* replacing already holds one. The combo for the slot
+            //     that holds the conflicting copy still emits — that's the
+            //     "would replacing this slot be better" sim.
+            if !drop_combo_is_valid(&equipped_gear, slot, item_id, &bonus_ids, inv_type, &spec) {
+                continue;
+            }
+
             let mut simc_str = base_simc_str.clone();
             let mut applied_enchant: u64 = 0;
             let mut applied_gem: u64 = 0;
@@ -292,6 +358,37 @@ main_hand=,id=200\n";
         assert_eq!(count, 2);
         assert!(input.contains("profileset.\"Combo 2\"+=finger1=,id=999"));
         assert!(input.contains("profileset.\"Combo 3\"+=finger2=,id=999"));
+    }
+
+    #[test]
+    fn ring_drop_same_as_equipped_only_emits_replacement_combo() {
+        // Equipped finger1 = item 500. Drop is another copy of item 500.
+        // Putting it in finger2 would mean wearing two of the same ring
+        // (unique-equipped violation). Only the finger1-replacement combo
+        // should be emitted.
+        let profile = "mage=test\nspec=frost\nfinger1=,id=500\nfinger2=,id=101\n";
+        let drops = vec![drop(500, 11, vec![])];
+        let (input, count, _) = generate_droptimizer_input(profile, &drops);
+        assert_eq!(count, 1, "expected only 1 combo (finger1 replacement):\n{input}");
+        assert!(
+            input.contains("profileset.\"Combo 2\"+=finger1=,id=500"),
+            "expected finger1 replacement combo:\n{input}"
+        );
+        assert!(
+            !input.contains("finger2=,id=500"),
+            "finger2 should not get a duplicate copy:\n{input}"
+        );
+    }
+
+    #[test]
+    fn trinket_drop_same_as_equipped_only_emits_replacement_combo() {
+        // Same unique-equipped rule for trinkets.
+        let profile = "mage=test\nspec=frost\ntrinket1=,id=900\ntrinket2=,id=901\n";
+        let drops = vec![drop(900, 12, vec![])];
+        let (input, count, _) = generate_droptimizer_input(profile, &drops);
+        assert_eq!(count, 1);
+        assert!(input.contains("trinket1=,id=900"));
+        assert!(!input.contains("trinket2=,id=900"));
     }
 
     #[test]

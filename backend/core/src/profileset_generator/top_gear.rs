@@ -5,9 +5,7 @@ use std::sync::Arc;
 use super::base_profile::{item_meta, parse_base_profile};
 
 use super::constraints::{
-    gear_set_identity_key, main_hand_is_two_hand, validate_catalyst_constraint,
-    validate_item_limits, validate_unique_equipped, validate_vault_constraint,
-    validate_weapon_constraint,
+    gear_set_identity_key, is_legal_gear_set, main_hand_is_two_hand, GearSetContext,
 };
 use super::selection::build_slot_candidates;
 use super::simc::{
@@ -229,30 +227,13 @@ pub fn generate_top_gear_input_with_talents(
             gear_set.remove("off_hand");
         }
 
-        // Validate unique-equipped constraints
-        if !validate_unique_equipped(&gear_set) {
-            continue;
-        }
-
-        // Vault constraint: only one vault item can be picked
-        if !validate_vault_constraint(&gear_set) {
-            continue;
-        }
-
-        // Weapon constraint: two-hander in main_hand cannot pair with off_hand
-        if !validate_weapon_constraint(&gear_set, &spec) {
-            continue;
-        }
-
-        // Catalyst constraint: max N catalyst items per combination
-        if let Some(charges) = catalyst_charges {
-            if !validate_catalyst_constraint(&gear_set, charges) {
-                continue;
-            }
-        }
-
-        // Item limit categories (e.g. max 2 embellished items)
-        if !validate_item_limits(&gear_set) {
+        if !is_legal_gear_set(
+            &gear_set,
+            &GearSetContext {
+                spec: &spec,
+                max_catalyst_charges: catalyst_charges,
+            },
+        ) {
             continue;
         }
 

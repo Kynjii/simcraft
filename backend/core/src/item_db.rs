@@ -869,7 +869,11 @@ pub(crate) fn resolve_bonuses(bonus_ids: &[u64]) -> BonusResolved {
 
 /// Get the raw JSON entry for an item from the DB.
 pub(crate) fn get_raw_item(item_id: u64) -> Option<&'static Value> {
-    items().get(&item_id)
+    // Use the cell directly rather than `items()` so unit tests that don't
+    // exercise item lookups (and therefore don't load game data) can still
+    // exercise validators / generators without panicking on incidental
+    // inventory-type queries. Production paths always load data at startup.
+    ITEMS.get()?.get(&item_id)
 }
 
 /// For a set of bonus IDs, return the item limit categories they belong to.
