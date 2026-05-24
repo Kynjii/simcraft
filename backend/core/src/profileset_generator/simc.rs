@@ -1,6 +1,6 @@
 pub(super) use crate::simc_string::{
-    extract_bonus_ids, extract_enchant_id, extract_gem_id, extract_item_id, set_enchant_id,
-    set_gem_id,
+    extract_bonus_ids, extract_enchant_id, extract_gem_id, extract_gem_ids, extract_item_id,
+    set_enchant_id, set_gem_id, set_gem_ids,
 };
 
 const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -47,12 +47,20 @@ pub(super) fn combinations<T: Clone>(items: &[T], k: usize) -> Vec<Vec<T>> {
 }
 
 pub(super) fn simc_has_socket(simc: &str) -> bool {
-    if extract_gem_id(simc) > 0 {
-        return true;
-    }
+    simc_socket_count(simc) > 0
+}
+
+/// Number of gem sockets on an equipped simc line. Reads the bonus-resolved
+/// socket count first; falls back to the gem_id list length when a profile
+/// has gems but no socket-adding bonus parsed (e.g. legacy/manual imports).
+pub(super) fn simc_socket_count(simc: &str) -> usize {
     let bonus_ids = extract_bonus_ids(simc);
     let resolved = crate::item_db::resolve_bonuses(&bonus_ids);
-    resolved.sockets.unwrap_or(0) > 0
+    let from_bonus = resolved.sockets.unwrap_or(0) as usize;
+    if from_bonus > 0 {
+        return from_bonus;
+    }
+    extract_gem_ids(simc).len()
 }
 
 pub(super) fn is_diamond(gem_item_id: u64) -> bool {

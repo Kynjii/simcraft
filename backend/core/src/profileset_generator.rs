@@ -375,6 +375,108 @@ finger1=,id=102,gem_id=213453\n";
         }
     }
 
+    // Multi-socket support: a 2-socket equipped item with N gem options should
+    // produce N + C(N,2) = N*(N+1)/2 multiset combos for that slot (e.g. 3 gems
+    // → 6 combos: AA, AB, AC, BB, BC, CC). Mirror combos (A,B) and (B,A) collapse
+    // because gems give character-wide stats — slot ordering doesn't affect DPS.
+    // The simc line is emitted as `gem_id=A/B` (slash-separated).
+    #[test]
+    fn top_gear_multi_socket_emits_multiset_combos() {
+        ensure_game_data_loaded();
+        // Bonus 8781 adds 2 sockets in one shot (per data/bonuses.json).
+        // Using a single 2-socket bonus keeps the simc-string view consistent
+        // with the alt item's `sockets: 2` metadata.
+        let base_profile = "\
+mage=test\n\
+spec=frost\n\
+neck=,id=400\n\
+main_hand=,id=200\n";
+
+        let alt_neck_2sock = json!({
+            "slot": "neck",
+            "simc_string": ",id=500,bonus_id=8781",
+            "is_equipped": false,
+            "origin": "bags",
+            "item_id": 500,
+            "ilevel": 0,
+            "name": "Alt Neck 2-socket",
+            "bonus_ids": [8781],
+            "enchant_id": 0,
+            "gem_id": 0,
+            "sockets": 2,
+        });
+        let equipped_neck = json!({
+            "slot": "neck",
+            "simc_string": ",id=400",
+            "is_equipped": true,
+            "origin": "equipped",
+            "item_id": 400,
+            "ilevel": 0,
+            "name": "Equipped Neck",
+            "bonus_ids": [],
+            "enchant_id": 0,
+            "gem_id": 0,
+            "sockets": 0,
+        });
+
+        let mut items_by_slot = HashMap::new();
+        items_by_slot.insert("neck".to_string(), vec![equipped_neck, alt_neck_2sock]);
+
+        let mut selected = HashMap::new();
+        selected.insert("neck".to_string(), vec!["500:8781:bags:neck".to_string()]);
+
+        // 3 gems, 2 sockets → 6 multisets: AA, AB, AC, BB, BC, CC.
+        let gems = [213453_u64, 213454_u64, 213455_u64];
+        let sockets = HashSet::from([500_u64]);
+        let (input, combo_count, _) = generate_top_gear_input_with_talents(
+            base_profile,
+            &items_by_slot,
+            &selected,
+            Some(50),
+            &[],
+            None,
+            &GemEnchantOptions {
+                gem_options: &gems,
+                socketed_item_ids: Some(&sockets),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            combo_count, 6,
+            "expected 6 multiset combos (3 gems × 2 sockets), got {combo_count}:\n{input}"
+        );
+
+        // Skip the header block and the base actor; every later block is a
+        // profileset. Collect the alt neck's gem multiset from each one.
+        let neck_gem_lists: Vec<Vec<u64>> = input
+            .split("### ")
+            .skip(2)
+            .filter_map(|block| block.lines().find(|l| l.contains("neck=,id=500")))
+            .map(crate::simc_string::extract_gem_ids)
+            .collect();
+
+        for gems in &neck_gem_lists {
+            assert_eq!(
+                gems.len(),
+                2,
+                "expected 2-socket neck to emit 2 slash-separated gem_ids, got {gems:?}"
+            );
+        }
+
+        // No mirror combos: dedup on the sorted multiset must match the raw count.
+        let mut seen: HashSet<Vec<u64>> = HashSet::new();
+        for gems in &neck_gem_lists {
+            let mut sorted = gems.clone();
+            sorted.sort();
+            assert!(
+                seen.insert(sorted.clone()),
+                "mirror combo emitted: {gems:?} (sorted {sorted:?})"
+            );
+        }
+    }
+
     // Regression: alt item with a socket-adding bonus (no gem yet) must be eligible
     // for gem assignment. Was broken when `resolved_item_to_value` dropped the
     // `sockets` field, leaving `alt_has_socket` permanently false.
