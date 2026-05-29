@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::helpers::*;
+use super::request_json::NormalizedRequest;
 use super::types::*;
 use super::SimcBinaries;
 use crate::addon_parser;
@@ -11,8 +12,9 @@ use crate::db::JobRepo;
 use crate::game_data;
 use crate::gear_resolver;
 use crate::log_buffer::LogBuffer;
-use crate::models::Job;
+use crate::models::{Job, SimcInputMode};
 use crate::profileset_generator;
+use crate::profileset_generator::triage::TRIAGE_THRESHOLD;
 use crate::simc_runner;
 
 fn normalized_talent_builds(talent_builds: &[TalentBuild]) -> Vec<(String, String)> {
@@ -118,16 +120,55 @@ pub(super) async fn create_top_gear_sim(
     let items_by_slot = build_items_by_slot(&req, &resolved);
     let talent_builds = normalized_talent_builds(&req.talent_builds);
     let max_combinations = capped_max_combinations(req.max_combinations);
-    let socketed_item_ids = socketed_item_ids(&resolved);
+    let socketed_ids = socketed_item_ids(&resolved);
     let gem_opts = profileset_generator::GemEnchantOptions {
         enchant_selections: Some(&req.enchant_selections),
         gem_options: &req.gem_options,
-        socketed_item_ids: Some(&socketed_item_ids),
+        socketed_item_ids: Some(&socketed_ids),
         replace_gems: req.replace_gems,
         diamond_always_use: req.diamond_always_use,
         max_colors: req.max_colors,
     };
 
+    // ── Path decision ────────────────────────────────────────────────────────
+    let estimate = profileset_generator::estimate_top_gear_combo_count(
+        &items_by_slot,
+        &req.selected_items,
+        &req.enchant_selections,
+        &req.gem_options,
+        &socketed_ids,
+        talent_builds.len().max(1),
+    );
+
+    let effective_estimate = max_combinations
+        .map(|cap| estimate.min(cap as u64))
+        .unwrap_or(estimate);
+    let use_streaming_path = effective_estimate >= TRIAGE_THRESHOLD;
+
+    if use_streaming_path {
+        let simc = match simc_bins.resolve(&req.options.simc_branch) {
+            Ok(path) => path,
+            Err(e) => return HttpResponse::BadRequest().json(json!({"detail": e})),
+        };
+        return super::streaming_top_gear::start_streaming_top_gear_job(
+            super::streaming_top_gear::StreamingTopGearStart {
+                req,
+                repo,
+                simc,
+                log_buffer,
+                base_profile,
+                items_by_slot,
+                talent_builds,
+                socketed_ids,
+                catalyst_charges,
+                max_combinations,
+                estimate,
+            },
+        )
+        .await;
+    }
+
+    // ── Existing eager path (unchanged) ──────────────────────────────────────
     let (generated_input, combo_count, combo_metadata) =
         match profileset_generator::generate_top_gear_input_with_talents(
             &base_profile,
@@ -170,7 +211,27 @@ pub(super) async fn create_top_gear_sim(
     let job_id = job.id.clone();
     let created_at = job.created_at.clone();
 
-    let meta_json = serde_json::to_string(&combo_metadata).unwrap_or_default();
+    // Build normalized request envelope for resumability.
+    let envelope = NormalizedRequest::new(
+        "top_gear",
+        json!({
+            "items_by_slot": items_by_slot,
+            "selected_items": req.selected_items,
+            "enchant_selections": req.enchant_selections,
+            "gem_options": req.gem_options,
+            "socketed_item_ids": socketed_ids.iter().collect::<Vec<_>>(),
+            "replace_gems": req.replace_gems,
+            "diamond_always_use": req.diamond_always_use,
+            "max_colors": req.max_colors,
+            "talent_builds": talent_builds,
+            "catalyst_charges": catalyst_charges,
+            "spec": req.options.spec_override,
+            "base_profile": base_profile,
+            "max_combinations": max_combinations,
+            "void_forge": req.void_forge,
+            "options": req.options.to_json(),
+        }),
+    );
 
     // Resolve simc BEFORE insert — invalid branch must not create an orphan
     // Pending row.
@@ -180,11 +241,14 @@ pub(super) async fn create_top_gear_sim(
     };
 
     let mut job = job;
-    job.combo_metadata_json = Some(meta_json);
+    job.request_json = Some(envelope.to_json_string().unwrap_or_default());
     job.batch_id = req.options.batch_id.clone();
     if let Err(e) = repo.insert(&job).await {
         return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
     }
+
+    // Best-effort write of per-combo metadata rows to the combo_metadata table.
+    write_combo_metadata_table(repo.get_ref(), &job_id, &combo_metadata).await;
 
     spawn_staged_sim(
         repo.get_ref().clone(),
@@ -194,6 +258,10 @@ pub(super) async fn create_top_gear_sim(
         generated_input,
         combo_count,
         log_buffer.get_ref().clone(),
+        10, // inline/eager path: staged pipeline spans 10-95%
+        SimcInputMode::Inline,
+        crate::simc_runner::StagedResumeState::default(),
+        crate::profileset_generator::triage::TriageConstants::default(),
     );
 
     HttpResponse::Ok().json(SimResponse {
@@ -202,7 +270,6 @@ pub(super) async fn create_top_gear_sim(
         created_at,
     })
 }
-
 pub(super) async fn get_top_gear_combo_count(req: web::Json<TopGearRequest>) -> HttpResponse {
     let mut simc_input = if req.max_upgrade {
         game_data::upgrade_simc_input(&req.simc_input)

@@ -6,10 +6,12 @@ mod droptimizer_handlers;
 mod enchant_gem_handlers;
 mod frontend;
 mod game_data_handlers;
-mod helpers;
+pub(crate) mod helpers;
 mod job_handlers;
+pub mod request_json;
 mod route_handlers;
 mod sim_handlers;
+mod streaming_top_gear;
 mod system_handlers;
 mod top_gear_handlers;
 mod types;
@@ -322,6 +324,34 @@ pub async fn start_server(
             web::Data::new(SettingsRepo::new(db.pool.clone())),
         )
     };
+
+    // Crash recovery: any job stuck in Running on boot was driven by a task that
+    // died with the previous backend. Demote per spec §5:
+    //   - request_json non-NULL → Paused (resumable)
+    //   - request_json NULL    → Failed  (predates pause/resume infrastructure)
+    if let Some(pool) = job_repo.pool() {
+        let _ = sqlx::query(
+            "UPDATE jobs SET status = 'paused' \
+             WHERE status = 'running' AND request_json IS NOT NULL",
+        )
+        .execute(pool)
+        .await;
+        let _ = sqlx::query(
+            "UPDATE jobs SET status = 'failed', \
+                             error_message = 'Backend restarted while running; not resumable (no request_json)' \
+             WHERE status = 'running' AND request_json IS NULL",
+        )
+        .execute(pool)
+        .await;
+        // Defensive: clear stale pause_requested flags on already-terminal jobs.
+        let _ = sqlx::query(
+            "UPDATE jobs SET pause_requested = 0 \
+             WHERE pause_requested = 1 \
+             AND status IN ('done', 'failed', 'cancelled')",
+        )
+        .execute(pool)
+        .await;
+    }
 
     // Apply persisted admin settings on startup
     if let Ok(Some(val)) = settings_repo.get("max_combinations").await {

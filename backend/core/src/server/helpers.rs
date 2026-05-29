@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::types::SimOptions;
-use crate::db::{self, JobRepo};
+use crate::db::{self, ComboMetadataInsert, ComboMetadataRepo, JobRepo};
 use crate::log_buffer::LogBuffer;
-use crate::models::JobStatus;
+use crate::models::{JobStatus, SimcInputMode};
 use crate::result_parser;
 use crate::simc_runner;
 use crate::types::ResolveGearResponse;
@@ -35,7 +35,10 @@ pub(super) async fn finalize_job_outcome(
             inject_realm(&mut parsed, simc_input);
             let result_str = serde_json::to_string(&parsed).unwrap_or_default();
             let raw_str = serde_json::to_string(&output.json).ok();
-            if let Err(e) = repo.set_result(job_id, &result_str, raw_str.as_deref()).await {
+            if let Err(e) = repo
+                .set_result(job_id, &result_str, raw_str.as_deref())
+                .await
+            {
                 eprintln!("[{}] Failed to set result: {}", job_id, e);
             }
             if let Err(e) = repo
@@ -293,6 +296,17 @@ pub(super) fn apply_spec_override(simc_input: &str, spec: &str) -> String {
     }
 }
 
+/// Inject end-to-end elapsed time (job creation → now) into the parsed result.
+/// Covers the full process including Triage and all staged-pipeline stages, not
+/// just the final-stage simc wall time that simc itself reports.
+pub(super) fn inject_total_elapsed(parsed: &mut Value, created_at: &str) {
+    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(created_at) {
+        let now = chrono::Utc::now();
+        let total = (now - created.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+        parsed["total_elapsed_seconds"] = json!((total * 100.0).round() / 100.0);
+    }
+}
+
 /// Extract server= (realm), region=, talents= from a simc input string and inject into result.
 pub(super) fn inject_realm(parsed: &mut Value, simc_input: &str) {
     for line in simc_input.lines() {
@@ -338,7 +352,20 @@ fn enqueue_job_update(
 /// racing. An unbounded channel keeps these callbacks lossless because staged
 /// sim runs emit a finite burst of updates and we always await the writer drain
 /// before persisting terminal state.
-pub(super) fn spawn_staged_sim(
+///
+/// `base_start` is the lower bound of the progress-bar range for the staged
+/// pipeline: 10 for inline/eager jobs (progress spans 10-95%), 50 for streamed
+/// jobs that ran Triage first (Triage consumed 5-50%, staged pipeline uses 50-95%).
+///
+/// `simc_input_mode` controls whether checkpoint writes and pause polling are
+/// active. Inline-mode jobs skip those paths; only Streamed-mode jobs support pause/resume.
+///
+/// `constants` are the TriageConstants used for this job. Passed through to
+/// checkpoint writes so resume can reconstruct the exact same calibration.
+/// Eager (Inline) callers pass `TriageConstants::default()`; Streamed callers
+/// pass the constants from the Triage checkpoint.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_staged_sim(
     repo: JobRepo,
     simc: PathBuf,
     options: Value,
@@ -346,6 +373,10 @@ pub(super) fn spawn_staged_sim(
     simc_input: String,
     combo_count: usize,
     log_buffer: Arc<LogBuffer>,
+    base_start: u8,
+    simc_input_mode: SimcInputMode,
+    resume_state: crate::simc_runner::StagedResumeState,
+    constants: crate::profileset_generator::triage::TriageConstants,
 ) {
     tokio::spawn(async move {
         // update_status now honors the terminal-state invariant: if the job
@@ -386,6 +417,7 @@ pub(super) fn spawn_staged_sim(
         let stages_log_jid = job_id.clone();
         let logs = log_buffer.clone();
         let jid_logs = job_id.clone();
+        let pool_opt = repo.pool().cloned();
 
         let result = simc_runner::run_simc_staged(
             &simc,
@@ -393,6 +425,11 @@ pub(super) fn spawn_staged_sim(
             &simc_input,
             &options,
             combo_count,
+            base_start,
+            simc_input_mode,
+            pool_opt,
+            resume_state,
+            constants,
             move |pct, stage, detail| {
                 enqueue_job_update(
                     &tx_progress,
@@ -426,33 +463,138 @@ pub(super) fn spawn_staged_sim(
             eprintln!("[{}] Job update writer task failed: {}", job_id, e);
         }
 
-        // Load metadata once for the gear-comparison parser. Try the current
-        // bare format first; fall back to the pre-Phase-0.6 wrapped form so a
-        // deploy landing while sims are running doesn't lose their metadata.
-        let meta: Option<HashMap<String, Vec<Value>>> = repo
-            .get(&job_id)
-            .await
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(|j| j.combo_metadata_json.as_ref())
-            .and_then(|s| {
-                serde_json::from_str::<HashMap<String, Vec<Value>>>(s)
-                    .ok()
-                    .or_else(|| {
-                        serde_json::from_str::<Value>(s)
-                            .ok()
-                            .and_then(|v| v.get("_combo_metadata").cloned())
-                            .and_then(|v| serde_json::from_value(v).ok())
-                    })
-            });
+        // Terminal writes — after all progress is flushed. The branch's
+        // staged runner returns StagedRunError::Paused for mid-pipeline
+        // pauses, which finalize_job_outcome (single-error) can't model,
+        // so the per-variant match stays inline here.
+        match result {
+            Ok(output) => {
+                let job_snap = repo.get(&job_id).await.ok().flatten();
+                let raw_meta = load_combo_metadata(&repo, &job_id).await;
+                let meta: Option<HashMap<String, Vec<Value>>> = if raw_meta.is_empty() {
+                    None
+                } else {
+                    Some(raw_meta)
+                };
 
-        finalize_job_outcome(&repo, &job_id, &simc_input, result, |json| {
-            result_parser::parse_top_gear_result(json, meta.as_ref())
-        })
-        .await;
+                let mut parsed = result_parser::parse_top_gear_result(&output.json, meta.as_ref());
+                inject_realm(&mut parsed, &simc_input);
+                if let Some(ref snap) = job_snap {
+                    inject_total_elapsed(&mut parsed, &snap.created_at);
+                }
+                let result_str = serde_json::to_string(&parsed).unwrap_or_default();
+                let raw_str = serde_json::to_string(&output.json).ok();
+                // set_result/set_report_files both honor the terminal-state
+                // invariant: writes are skipped when the job is already
+                // cancelled, so a late-arriving result can't resurrect it.
+                if let Err(e) = repo
+                    .set_result(&job_id, &result_str, raw_str.as_deref())
+                    .await
+                {
+                    eprintln!("[{}] Failed to set result: {}", job_id, e);
+                }
+                if let Err(e) = repo
+                    .set_report_files(
+                        &job_id,
+                        output.html_report.as_deref(),
+                        output.text_output.as_deref(),
+                    )
+                    .await
+                {
+                    eprintln!("[{}] Failed to set report files: {}", job_id, e);
+                }
+            }
+            Err(simc_runner::StagedRunError::Paused) => {
+                // Job was paused mid-pipeline. Status is already set to Paused
+                // inside run_simc_staged — nothing more to do here.
+            }
+            Err(simc_runner::StagedRunError::Other(e)) => {
+                let is_cancelled = repo
+                    .get(&job_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|j| j.status == JobStatus::Cancelled)
+                    .unwrap_or(false);
+                if !is_cancelled {
+                    if let Err(db_err) = repo.set_error(&job_id, &e).await {
+                        eprintln!("[{}] Failed to set error: {}", job_id, db_err);
+                    }
+                }
+            }
+        }
         log_buffer.remove(&job_id);
     });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handoff_streamed_top_gear_to_staged(
+    pool: &sqlx::AnyPool,
+    repo: &JobRepo,
+    simc_bin: &std::path::Path,
+    job_id: &str,
+    base_profile: &str,
+    options: &Value,
+    survivor_combo_ids: &[i64],
+    log_buffer: &Arc<LogBuffer>,
+    constants: crate::profileset_generator::triage::TriageConstants,
+) {
+    if survivor_combo_ids.is_empty() {
+        let _ = repo
+            .set_error(
+                job_id,
+                "Triage eliminated all candidates; no survivors to sim.",
+            )
+            .await;
+        log_buffer.remove(job_id);
+        return;
+    }
+
+    let metadata_repo = ComboMetadataRepo::new(pool.clone());
+    let rows = match metadata_repo
+        .list_for_combo_ids(job_id, survivor_combo_ids)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            let _ = repo
+                .set_error(
+                    job_id,
+                    &format!("Handoff: failed to read combo metadata: {}", e),
+                )
+                .await;
+            log_buffer.remove(job_id);
+            return;
+        }
+    };
+
+    let survivor_simc_lines: Vec<&str> = rows.iter().map(|r| r.profileset_simc.as_str()).collect();
+    if survivor_simc_lines.is_empty() {
+        let _ = repo
+            .set_error(job_id, "Triage produced no survivor profilesets to sim.")
+            .await;
+        log_buffer.remove(job_id);
+        return;
+    }
+
+    let combined_input = format!(
+        "# Base Actor\n{}\n{}",
+        base_profile,
+        survivor_simc_lines.join("\n")
+    );
+    spawn_staged_sim(
+        repo.clone(),
+        simc_bin.to_path_buf(),
+        options.clone(),
+        job_id.to_string(),
+        combined_input,
+        survivor_simc_lines.len(),
+        log_buffer.clone(),
+        50,
+        SimcInputMode::Streamed,
+        crate::simc_runner::StagedResumeState::default(),
+        constants,
+    );
 }
 
 /// Validate batch_id against MAX_SCENARIOS. Returns an error response if rejected.
@@ -476,4 +618,120 @@ pub(super) async fn validate_batch(
         })));
     }
     None
+}
+
+/// Write combo_metadata rows to the `combo_metadata` table.
+/// This is a best-effort write — failures are logged but don't block the job.
+///
+/// `metadata_strs`: pre-serialized `(combo_name, metadata_json)` pairs ordered by combo_id.
+pub(super) async fn write_combo_metadata_table_raw(
+    repo: &JobRepo,
+    job_id: &str,
+    metadata_strs: &[(String, String)],
+) {
+    if metadata_strs.is_empty() {
+        return;
+    }
+    let pool = match repo.pool() {
+        Some(p) => p.clone(),
+        None => return, // in-memory backend, no table to write to
+    };
+    let metadata_repo = ComboMetadataRepo::new(pool.clone());
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "[{}] combo_metadata table write: failed to begin tx: {}",
+                job_id, e
+            );
+            return;
+        }
+    };
+    let inserts: Vec<ComboMetadataInsert> = metadata_strs
+        .iter()
+        .enumerate()
+        .map(|(i, (name, meta_json))| ComboMetadataInsert {
+            combo_id: (i as i64) + 1,
+            combo_name: name.as_str(),
+            combo_key: "",
+            batch_idx: None,
+            cursor_json: "[]",
+            profileset_simc: "",
+            metadata_json: meta_json.as_str(),
+        })
+        .collect();
+    if let Err(e) = metadata_repo.insert_batch(&mut tx, job_id, &inserts).await {
+        eprintln!(
+            "[{}] combo_metadata table write failed (non-fatal): {}",
+            job_id, e
+        );
+        return;
+    }
+    if let Err(e) = tx.commit().await {
+        eprintln!(
+            "[{}] combo_metadata table write: commit failed (non-fatal): {}",
+            job_id, e
+        );
+    }
+}
+
+/// Convenience wrapper for handlers that have `HashMap<String, Vec<Value>>` combo_metadata
+/// (top_gear, enchant_gem, upgrade_compare).
+pub(super) async fn write_combo_metadata_table(
+    repo: &JobRepo,
+    job_id: &str,
+    combo_metadata: &HashMap<String, Vec<Value>>,
+) {
+    let metadata_strs: Vec<(String, String)> = combo_metadata
+        .iter()
+        .map(|(name, deltas)| {
+            (
+                name.clone(),
+                serde_json::to_string(deltas).unwrap_or_else(|_| "[]".to_string()),
+            )
+        })
+        .collect();
+    write_combo_metadata_table_raw(repo, job_id, &metadata_strs).await;
+}
+
+/// Convenience wrapper for handlers that have `HashMap<String, Value>` combo_metadata
+/// (droptimizer).
+pub(super) async fn write_combo_metadata_table_value(
+    repo: &JobRepo,
+    job_id: &str,
+    combo_metadata: &HashMap<String, Value>,
+) {
+    let metadata_strs: Vec<(String, String)> = combo_metadata
+        .iter()
+        .map(|(name, val)| {
+            (
+                name.clone(),
+                serde_json::to_string(val).unwrap_or_else(|_| "null".to_string()),
+            )
+        })
+        .collect();
+    write_combo_metadata_table_raw(repo, job_id, &metadata_strs).await;
+}
+
+/// Load combo_metadata for a job from the `combo_metadata` table.
+/// Returns an empty map for in-memory repos or when no rows exist.
+pub(super) async fn load_combo_metadata(
+    repo: &JobRepo,
+    job_id: &str,
+) -> HashMap<String, Vec<Value>> {
+    let Some(pool) = repo.pool() else {
+        return HashMap::new();
+    };
+    let meta_repo = ComboMetadataRepo::new(pool.clone());
+    match meta_repo.list_for_job(job_id, None).await {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|r| {
+                let deltas: Vec<Value> = serde_json::from_str(&r.metadata_json).ok()?;
+                Some((r.combo_name, deltas))
+            })
+            .collect(),
+        Err(_) => HashMap::new(),
+    }
 }

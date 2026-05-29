@@ -11,7 +11,13 @@ import StatWeightsTable from '../../components/results/StatWeightsTable';
 import TalentTree from '../../components/talents/TalentTree';
 import TopGearResults from '../../components/gear/TopGearResults';
 
-import { API_URL } from '../../lib/api';
+import {
+  API_URL,
+  fetchSimInputPreview,
+  pauseSim,
+  resumeSim,
+  type SimInputPreview,
+} from '../../lib/api';
 import { useLanguage } from '../../lib/i18n';
 import {
   getScenarioSiblings,
@@ -19,16 +25,19 @@ import {
   type ScenarioSibling,
 } from '../../lib/scenario-siblings';
 import { getTopGearState } from '../../lib/topgear-state';
+import { ROUTES } from '../../lib/routes';
 
 interface JobData {
   id: string;
-  status: string;
+  status: 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
   progress: number;
   progress_stage?: string;
   progress_detail?: string;
   stages_completed?: string[];
   result: Record<string, unknown> | null;
   error: string | null;
+  simc_input_mode?: 'inline' | 'streamed';
+  pause_requested?: boolean;
 }
 
 export default function SimResultClient() {
@@ -50,6 +59,10 @@ export default function SimResultClient() {
   const [showLogs, setShowLogs] = useState(true);
   const logCursorRef = useRef(0);
   const [siblings, setSiblings] = useState<ScenarioSibling[] | null>(null);
+  const [inputPreview, setInputPreview] = useState<SimInputPreview | null>(null);
+  const [inputPreviewError, setInputPreviewError] = useState('');
+  const [showInputPreview, setShowInputPreview] = useState(false);
+  const inputPreviewFetchedRef = useRef(false);
 
   useEffect(() => {
     setSiblings(getScenarioSiblings());
@@ -66,7 +79,10 @@ export default function SimResultClient() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: JobData = await res.json();
         if (active) setJob(data);
-        if (active && (data.status === 'pending' || data.status === 'running')) {
+        if (
+          active &&
+          (data.status === 'pending' || data.status === 'running' || data.status === 'paused')
+        ) {
           timer = setTimeout(poll, 2000);
         }
       } catch (err) {
@@ -110,7 +126,60 @@ export default function SimResultClient() {
     };
   }, [showLogs, id, job?.status]);
 
+  // Final flush: when the job transitions to a terminal state, fetch any
+  // log lines that arrived between the last successful poll and the status
+  // change. The polling effect above stops on terminal status, so without
+  // this the trailing output (e.g. a Final stage that ran in under 1s) is
+  // lost from the UI even though it's still in the backend ring buffer.
+  useEffect(() => {
+    if (!showLogs || !id || id === '_') return;
+    if (job?.status !== 'done' && job?.status !== 'failed' && job?.status !== 'cancelled') return;
+    const cursor = logCursorRef.current;
+    fetch(`${API_URL}/api/sim/${id}/logs?after=${cursor}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data || !data.lines || data.lines.length === 0) return;
+        setLogLines((prev) => {
+          const merged = [...prev, ...data.lines];
+          return merged.length > 1000 ? merged.slice(-1000) : merged;
+        });
+        logCursorRef.current = data.next;
+      })
+      .catch(() => {
+        /* ignore */
+      });
+  }, [showLogs, id, job?.status]);
+
   const handleToggleLogs = useCallback(() => setShowLogs((v) => !v), []);
+
+  const handlePause = useCallback(async () => {
+    setJob((current) =>
+      current && current.id === id ? { ...current, pause_requested: true } : current
+    );
+    try {
+      await pauseSim(id);
+    } catch (e) {
+      setJob((current) =>
+        current && current.id === id ? { ...current, pause_requested: false } : current
+      );
+      console.error('Pause failed:', e);
+    }
+  }, [id]);
+
+  const handleToggleInputPreview = useCallback(() => {
+    setShowInputPreview((v) => {
+      const next = !v;
+      if (next && !inputPreviewFetchedRef.current) {
+        inputPreviewFetchedRef.current = true;
+        fetchSimInputPreview(id)
+          .then((data) => setInputPreview(data))
+          .catch((err) =>
+            setInputPreviewError(err instanceof Error ? err.message : 'Failed to load input')
+          );
+      }
+      return next;
+    });
+  }, [id]);
 
   if (fetchError) {
     return (
@@ -160,21 +229,71 @@ export default function SimResultClient() {
     );
   }
 
-  if (job.status === 'pending' || job.status === 'running') {
+  if (job.status === 'pending' || job.status === 'running' || job.status === 'paused') {
     return (
       <div className="space-y-3">
-        <SimStatus
-          status={job.status}
-          progress={job.progress}
-          progressStage={job.progress_stage}
-          progressDetail={job.progress_detail}
-          stagesCompleted={job.stages_completed}
-          jobId={id}
-          onCancelled={() => setJob({ ...job, status: 'cancelled' })}
-          logLines={logLines}
-          showLogs={showLogs}
-          onToggleLogs={handleToggleLogs}
-        />
+        {job.status === 'paused' ? (
+          <div className="flex flex-col items-center justify-center space-y-6 py-16">
+            <div className="w-72 rounded-xl border border-amber-500/20 bg-amber-500/5 p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold uppercase tracking-wider text-amber-400">
+                    Paused
+                  </p>
+                  {job.progress_stage && (
+                    <p className="mt-0.5 text-xs text-on-surface-variant">
+                      at {job.progress_stage}
+                      {job.progress_detail ? ` · ${job.progress_detail}` : ''}
+                    </p>
+                  )}
+                </div>
+                <span className="text-xl font-black text-amber-400">{job.progress}%</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={async () => {
+                  try {
+                    await resumeSim(id);
+                  } catch (e) {
+                    console.error('Resume failed:', e);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:border-primary/50 hover:bg-primary/20"
+              >
+                Resume
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch(`${API_URL}/api/sim/${id}/cancel`, { method: 'POST' });
+                  } catch (e) {
+                    console.error('Cancel failed:', e);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-bold text-red-400 transition-colors hover:border-red-500/50 hover:bg-red-500/20"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <SimStatus
+            status={job.status}
+            progress={job.progress}
+            progressStage={job.progress_stage}
+            progressDetail={job.progress_detail}
+            stagesCompleted={job.stages_completed}
+            jobId={id}
+            onCancelled={() => setJob({ ...job, status: 'cancelled' })}
+            canPause={job.status === 'running' && job.simc_input_mode === 'streamed'}
+            pauseRequested={!!job.pause_requested}
+            onPause={handlePause}
+            logLines={logLines}
+            showLogs={showLogs}
+            onToggleLogs={handleToggleLogs}
+          />
+        )}
         <div className="flex items-center justify-center text-[10px] uppercase tracking-wider text-on-surface-variant/40">
           <a
             href={`${API_URL}/api/sim/${id}/input`}
@@ -272,11 +391,13 @@ export default function SimResultClient() {
             desiredTargets={r.desired_targets as number | undefined}
             iterations={r.iterations as number | undefined}
             targetError={r.target_error as number | undefined}
-            elapsedTime={r.elapsed_time_seconds as number | undefined}
+            elapsedTime={(r.total_elapsed_seconds ?? r.elapsed_time_seconds) as number | undefined}
+            sourceJobId={typeof id === 'string' ? id : undefined}
+            sourceIsStreamed={job?.simc_input_mode === 'streamed'}
             backLink={
               hasTopGearState ? (
                 <a
-                  href="/top-gear"
+                  href={ROUTES.topGear}
                   className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:border-primary/50 hover:bg-primary/20"
                 >
                   <svg
@@ -314,7 +435,7 @@ export default function SimResultClient() {
             desiredTargets={r.desired_targets as number | undefined}
             iterations={r.iterations as number | undefined}
             targetError={r.target_error as number | undefined}
-            elapsedTime={r.elapsed_time_seconds as number | undefined}
+            elapsedTime={(r.total_elapsed_seconds ?? r.elapsed_time_seconds) as number | undefined}
             baseDps={r.base_dps as number | undefined}
           />
           {r.equipped_gear && Object.keys(r.equipped_gear as Record<string, unknown>).length > 0 ? (
@@ -345,6 +466,63 @@ export default function SimResultClient() {
           />
         </>
       )}
+
+      {/* Input preview (lazy-loaded on demand) */}
+      <div className="overflow-hidden rounded-xl border border-outline-variant/10">
+        <button
+          onClick={handleToggleInputPreview}
+          className="flex w-full items-center justify-between bg-surface-container-high px-4 py-2 text-left transition-colors hover:bg-surface-container-highest"
+        >
+          <span className="text-[12px] font-medium uppercase tracking-wider text-on-surface-variant/60">
+            SimC Input
+          </span>
+          <svg
+            className={`h-3.5 w-3.5 text-on-surface-variant/40 transition-transform ${showInputPreview ? 'rotate-180' : ''}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        </button>
+        {showInputPreview && (
+          <div className="bg-surface-container-low p-4">
+            {inputPreviewError ? (
+              <p className="text-[13px] text-red-400/70">{inputPreviewError}</p>
+            ) : !inputPreview ? (
+              <p className="text-[13px] text-on-surface-variant/40">Loading…</p>
+            ) : inputPreview.mode === 'inline' ? (
+              <pre className="max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all font-mono text-[13px] leading-[1.7] text-on-surface-variant/60">
+                {inputPreview.input}
+              </pre>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-on-surface-variant/40">
+                    Base Profile
+                  </p>
+                  <pre className="max-h-[300px] overflow-y-auto whitespace-pre-wrap break-all font-mono text-[13px] leading-[1.7] text-on-surface-variant/60">
+                    {inputPreview.base_profile}
+                  </pre>
+                </div>
+                <div>
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-on-surface-variant/40">
+                    Profilesets (preview of {inputPreview.preview_profilesets.length} of{' '}
+                    {inputPreview.survivor_count})
+                  </p>
+                  <pre className="max-h-[300px] overflow-y-auto whitespace-pre-wrap break-all font-mono text-[13px] leading-[1.7] text-on-surface-variant/60">
+                    {inputPreview.preview_profilesets.join('\n')}
+                  </pre>
+                </div>
+                <p className="text-[12px] text-on-surface-variant/40">{inputPreview.note}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Footer links */}
       <div className="flex items-center justify-center gap-3 pb-4 text-[10px] uppercase tracking-wider text-on-surface-variant/40">

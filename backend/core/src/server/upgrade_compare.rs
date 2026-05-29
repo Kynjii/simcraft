@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::helpers::*;
+use super::request_json::NormalizedRequest;
 use super::types::*;
 use super::SimcBinaries;
 use crate::addon_parser;
@@ -423,7 +424,18 @@ pub(super) async fn create_upgrade_compare_sim(
     let job_id = job.id.clone();
     let created_at = job.created_at.clone();
 
-    let meta_json = serde_json::to_string(&combo_metadata).unwrap_or_default();
+    // Build normalized request envelope for resumability.
+    let envelope = NormalizedRequest::new(
+        "upgrade_compare",
+        json!({
+            "base_profile": prepared.base_profile,
+            "upgraded_options_by_slot": prepared.upgraded_options_by_slot,
+            "upgrade_budget": prepared.upgrade_budget,
+            "selected_slots": req.selected_slots,
+            "max_combinations": req.max_combinations,
+            "options": req.options.to_json(),
+        }),
+    );
 
     // Resolve simc BEFORE insert — invalid branch must not create an orphan
     // Pending row.
@@ -433,11 +445,14 @@ pub(super) async fn create_upgrade_compare_sim(
     };
 
     let mut job = job;
-    job.combo_metadata_json = Some(meta_json);
+    job.request_json = Some(envelope.to_json_string().unwrap_or_default());
     job.batch_id = req.options.batch_id.clone();
     if let Err(e) = repo.insert(&job).await {
         return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
     }
+
+    // Best-effort write of per-combo metadata rows to the combo_metadata table.
+    write_combo_metadata_table(repo.get_ref(), &job_id, &combo_metadata).await;
 
     spawn_staged_sim(
         repo.get_ref().clone(),
@@ -447,6 +462,10 @@ pub(super) async fn create_upgrade_compare_sim(
         generated_input,
         combo_count,
         log_buffer.get_ref().clone(),
+        10, // inline/eager path: staged pipeline spans 10-95%
+        crate::models::SimcInputMode::Inline,
+        crate::simc_runner::StagedResumeState::default(),
+        crate::profileset_generator::triage::TriageConstants::default(),
     );
 
     HttpResponse::Ok().json(SimResponse {

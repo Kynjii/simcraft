@@ -151,23 +151,23 @@ export default function GearSlotRow({
         </div>
         <p className="truncate text-[11px] text-muted">
           {SLOT_LABELS[slot] || slot}
-          {item.ilevel > 0 && ` Â· ${item.ilevel}`}
-          {info?.tag && ` Â· ${info.tag}`}
+          {item.ilevel > 0 && ` · ${item.ilevel}`}
+          {info?.tag && ` · ${info.tag}`}
           {gems.length > 0 ? (
             <span className="text-sky-400/70">
               {' '}
-              Â· {gems.map((g) => localizedGemName(g, locale)).join(', ')}
+              · {gems.map((g) => localizedGemName(g, locale)).join(', ')}
             </span>
           ) : (
             (info?.sockets ?? 0) > 0 && (
               <span className="text-sky-400/70">
                 {' '}
-                Â· {(info?.sockets ?? 0) > 1 ? t('gear.sockets') : t('gear.socket')}
+                · {(info?.sockets ?? 0) > 1 ? t('gear.sockets') : t('gear.socket')}
               </span>
             )
           )}
           {enchant?.name && (
-            <span className="text-emerald-400/70"> Â· {localizedEnchantName(enchant, locale)}</span>
+            <span className="text-emerald-400/70"> · {localizedEnchantName(enchant, locale)}</span>
           )}
         </p>
       </div>

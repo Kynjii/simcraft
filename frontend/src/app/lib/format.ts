@@ -1,7 +1,3 @@
-/** Shared DPS / number formatting. Used by the history list, the per-row
- * ability chart, and any future "Best DPS" badge. Single source of truth so
- * the format doesn't drift between contexts. */
-
 /**
  * Format a DPS number for compact display.
  *

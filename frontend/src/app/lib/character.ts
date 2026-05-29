@@ -1,5 +1,5 @@
 /** Shared helpers for parsing the SimC export "name line" and persisting the
- * last-seen character to localStorage. Replaces three identical copies that
+ * last-seen character to localStorage. Replaces several identical copies that
  * lived in TopBar, SidebarCharacter, and quick-sim/page. */
 
 export const LAST_CHARACTER_KEY = 'simhammer_last_character';
@@ -26,9 +26,8 @@ const REGION_LINE = /^region=(\w+)/m;
  *
  * Side effect: when both name and realm are extractable, the (name, realm)
  * pair is persisted under `LAST_CHARACTER_KEY` so navigation away from a
- * configured sim doesn't lose the current character context. This used to
- * happen inside three separate copies of this function — keeping the
- * write site here avoids three components fighting over the same key. */
+ * configured sim doesn't lose the current character context. Keeping the
+ * write site here avoids multiple components fighting over the same key. */
 export function parseCharacterInfo(input: string): CharacterInfo | null {
   if (!input) return null;
   const nameMatch = input.match(NAME_LINE);

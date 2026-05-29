@@ -1,5 +1,4 @@
 /* eslint-disable @next/next/no-img-element */
-
 import { formatDps } from '../../lib/format';
 
 interface AbilityRow {

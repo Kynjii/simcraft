@@ -16,6 +16,10 @@ use super::upgrade_compare;
 pub(super) fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/api/sim", web::post().to(sim_handlers::create_sim))
         .route(
+            "/api/sim/{id}/sim-row",
+            web::post().to(sim_handlers::sim_row),
+        )
+        .route(
             "/api/top-gear/sim",
             web::post().to(top_gear_handlers::create_top_gear_sim),
         )
@@ -70,8 +74,22 @@ pub(super) fn configure(cfg: &mut web::ServiceConfig) {
             web::post().to(job_handlers::cancel_sim),
         )
         .route(
+            "/api/sim/{id}/pause",
+            web::post().to(job_handlers::pause_sim),
+        )
+        .route(
+            "/api/sim/{id}/resume",
+            web::post().to(job_handlers::resume_sim),
+        )
+        .route("/api/jobs", web::get().to(job_handlers::list_jobs))
+        .route("/api/jobs/{id}", web::delete().to(job_handlers::delete_job))
+        .route(
             "/api/sim/{id}/input",
             web::get().to(job_handlers::get_sim_input),
+        )
+        .route(
+            "/api/sim/{id}/input/preview",
+            web::get().to(job_handlers::get_sim_input_preview),
         )
         .route(
             "/api/sim/{id}/raw",
@@ -192,17 +210,15 @@ pub(super) fn configure(cfg: &mut web::ServiceConfig) {
 
     #[cfg(feature = "desktop")]
     {
-        cfg.route("/api/sims", web::get().to(job_handlers::list_sims))
-            .route(
-                "/api/system-stats",
-                web::get().to(system_handlers::system_stats),
-            );
+        cfg.route(
+            "/api/system-stats",
+            web::get().to(system_handlers::system_stats),
+        );
     }
 
     #[cfg(not(feature = "desktop"))]
     {
-        cfg.route("/api/sims", web::get().to(job_handlers::list_sims_filtered))
-            .route("/api/admin/login", web::post().to(admin_handlers::login))
+        cfg.route("/api/admin/login", web::post().to(admin_handlers::login))
             .route(
                 "/api/admin/auth/check",
                 web::get().to(admin_handlers::check_auth),

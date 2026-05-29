@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSimContext } from '../components/sim-config/SimContext';
-import { API_URL } from './api';
+import { API_URL, fetchActiveJobs } from './api';
 import { useLanguage } from './i18n';
 import { decodeHeader } from './talentDecode';
 import { SPEC_ID_TO_NAME } from './types';
@@ -51,6 +51,7 @@ export function useSimSubmit({
     scenarios,
     clearScenarios,
     parallelProfilesets,
+    triageMaxBatchProfilesets,
   } = useSimContext();
 
   // Derive spec from selected talent string so the backend can override spec= in the SimC input
@@ -76,6 +77,28 @@ export function useSimSubmit({
         setError(err);
         return;
       }
+    }
+
+    // Soft warning if other sims are already running. v1 uses confirm()
+    // — a styled modal is a future polish.
+    //
+    // Intentionally narrower than isActiveStatus: Paused jobs are "active"
+    // for UI purposes (still incomplete) but don't compete for CPU here, so
+    // they don't trigger the warning.
+    try {
+      const active = await fetchActiveJobs();
+      const activeCount = active.filter((j) => ['pending', 'running'].includes(j.status)).length;
+      if (activeCount >= 1) {
+        const stronger = activeCount >= 2;
+        const message = stronger
+          ? `You have ${activeCount} sims already running. Adding another will slow them all down significantly. Consider pausing one of the active sims first. Continue anyway?`
+          : `You have 1 sim already running. Each simc uses all CPU cores by default — running multiple at once will slow each one down proportionally. Continue?`;
+        if (!window.confirm(message)) {
+          return;
+        }
+      }
+    } catch {
+      // If the active-list fetch fails, fall through silently — don't block submission on a stat call.
     }
 
     const pagePayload = buildPayload();
@@ -106,6 +129,7 @@ export function useSimSubmit({
         ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
         ...(simcFooter ? { simc_footer: simcFooter } : {}),
         ...(parallelProfilesets ? {} : { parallel_profilesets: false }),
+        triage_max_batch_profilesets: triageMaxBatchProfilesets,
         // Raid buffs: only send overrides for disabled buffs
         ...(Object.values(raidBuffs).some((v) => !v)
           ? {
@@ -213,6 +237,7 @@ export function useSimSubmit({
     scenarios,
     clearScenarios,
     parallelProfilesets,
+    triageMaxBatchProfilesets,
     t,
   ]);
 
