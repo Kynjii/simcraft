@@ -6,11 +6,15 @@ mod droptimizer_handlers;
 mod enchant_gem_handlers;
 mod frontend;
 mod game_data_handlers;
+mod handler_prep;
 pub(crate) mod helpers;
 mod job_handlers;
 pub mod request_json;
+mod provider_handlers;
 mod route_handlers;
 mod sim_handlers;
+mod cloud_estimate;
+pub(crate) mod cloud_streaming;
 mod streaming_top_gear;
 mod system_handlers;
 mod top_gear_handlers;
@@ -365,8 +369,34 @@ pub async fn start_server(
         }
     }
 
-    let simc_data = web::Data::new(simc_bins);
+    let simc_data = web::Data::new(simc_bins.clone());
     let log_data = web::Data::new(Arc::new(LogBuffer::new()));
+
+    let http_client = reqwest::Client::builder()
+        .user_agent(concat!("simhammer/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("reqwest client");
+    // Pool is Some on web (sqlx-backed JobRepo) and None on desktop (memory
+    // backend). LocalSimcProvider threads it into run_simc_staged for
+    // pause-resume checkpoint persistence.
+    //
+    // local_sim_queue: 1-permit semaphore shared by LocalSimcProvider and the
+    // streaming Top Gear pipeline. Local sims acquire/release around their
+    // execution so they serialize instead of fighting over CPU. Remote
+    // providers (Simmit) don't touch the queue — they have their own
+    // server-side queueing.
+    let local_sim_queue = crate::compute::local::new_local_sim_queue();
+    let local_queue_data = web::Data::new(local_sim_queue.clone());
+    let provider_registry = web::Data::new(Arc::new(
+        crate::compute::ProviderRegistry::new_default(
+            simc_bins.clone(),
+            job_repo.pool().cloned(),
+            local_sim_queue,
+            http_client.clone(),
+        ),
+    ));
     #[cfg(feature = "desktop")]
     let stats_data = web::Data::new(Arc::new(Mutex::new(system_handlers::SystemStats::new())));
     #[cfg(not(feature = "desktop"))]
@@ -393,6 +423,8 @@ pub async fn start_server(
             .app_data(route_repo.clone())
             .app_data(char_repo.clone())
             .app_data(settings_repo.clone())
+            .app_data(provider_registry.clone())
+            .app_data(local_queue_data.clone())
             .configure(api_routes::configure);
         #[cfg(not(feature = "desktop"))]
         let app = app.app_data(admin_secret.clone());

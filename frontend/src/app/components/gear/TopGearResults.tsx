@@ -6,7 +6,7 @@ import GearOverview from './GearOverview';
 import TopGearRankings from './TopGearRankings';
 import { useEnchantInfo, useGemInfo, useItemInfo } from '../../lib/useItemInfo';
 import { useLanguage } from '../../lib/i18n';
-import { useWowheadTooltips } from '../../lib/useWowheadTooltips';
+import { useWowheadTooltips, wowheadKeyFor } from '../../lib/useWowheadTooltips';
 import type { GroupMode, TopGearResultsProps } from './topGearResultsTypes';
 import {
   buildBestGearSet,
@@ -27,8 +27,6 @@ export default function TopGearResults({
   baseDps,
   results,
   equippedGear,
-  dpsError,
-  dpsErrorPct,
   fightLength,
   desiredTargets,
   iterations,
@@ -79,7 +77,11 @@ export default function TopGearResults({
   const allGemIds = useMemo(() => collectGemIds(results, equippedGear), [results, equippedGear]);
   const gemInfoMap = useGemInfo(allGemIds);
 
-  useWowheadTooltips([itemInfoMap]);
+  const wowheadKey = useMemo(
+    () => wowheadKeyFor({ item: itemInfoMap, enchant: enchantInfoMap, gem: gemInfoMap }),
+    [itemInfoMap, enchantInfoMap, gemInfoMap]
+  );
+  useWowheadTooltips([wowheadKey]);
 
   const hasGearOverview = equippedGear && Object.keys(equippedGear).length > 0;
   const characterRenderUrl = getCharacterRenderUrl(playerRealm, playerName, playerRegion);
@@ -92,8 +94,6 @@ export default function TopGearResults({
         playerRealm={playerRealm}
         playerRegion={playerRegion}
         dps={selectedResult && selectedResult.delta > 0 ? selectedResult.dps : baseDps}
-        dpsError={dpsError}
-        dpsErrorPct={dpsErrorPct}
         fightLength={fightLength}
         desiredTargets={desiredTargets}
         iterations={iterations}
@@ -124,6 +124,9 @@ export default function TopGearResults({
           characterRenderUrl={characterRenderUrl}
           upgradeSlots={upgradeSlots}
           downgradeSlots={downgradeSlots}
+          itemInfoMap={itemInfoMap}
+          enchantInfoMap={enchantInfoMap}
+          gemInfoMap={gemInfoMap}
         />
       )}
 
@@ -131,6 +134,7 @@ export default function TopGearResults({
         results={activeResults}
         maxDps={maxDps}
         baseDps={baseDps}
+        targetError={targetError}
         hasEncounterData={hasEncounterData}
         groupMode={groupMode}
         onGroupModeChange={setGroupMode}

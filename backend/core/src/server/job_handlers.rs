@@ -9,6 +9,52 @@ use crate::models::{JobStatus, SimcInputMode};
 use crate::simc_runner;
 use std::sync::Arc;
 
+/// Whether a Simmit job should advertise pause/resume, given the chunk count.
+/// `None` = the chunk-count read FAILED (transient). On an unknown count we
+/// advertise Pause: showing Pause on a single-chunk job (a no-op press) is less
+/// bad than HIDING Pause on a real multi-chunk job. `Some(1)` cannot pause;
+/// `Some(>1)` can.
+fn simmit_pause_capability(chunk_count: Option<i64>) -> bool {
+    match chunk_count {
+        None => true,
+        Some(c) => c > 1,
+    }
+}
+
+/// Per-run effective capabilities. For a cloud-streaming run, pause is only
+/// possible when the run spans more than one chunk.
+pub(super) fn effective_capabilities(provider_id: &str, chunk_count: Option<i64>) -> serde_json::Value {
+    let is_cloud = provider_id == "simmit"; // any cloud-streaming provider
+    serde_json::json!({
+        "cancel": true, // both local and cloud runs are cancellable
+        "pause": if is_cloud { simmit_pause_capability(chunk_count) } else { true },
+    })
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+    #[test]
+    fn cloud_single_chunk_cannot_pause() {
+        assert_eq!(effective_capabilities("simmit", Some(1))["pause"], false);
+        assert_eq!(effective_capabilities("simmit", Some(1))["cancel"], true);
+    }
+    #[test]
+    fn cloud_multi_chunk_can_pause() {
+        assert_eq!(effective_capabilities("simmit", Some(3))["pause"], true);
+    }
+    #[test]
+    fn local_can_pause() {
+        assert_eq!(effective_capabilities("local", None)["pause"], true);
+    }
+    #[test]
+    fn simmit_pause_capability_does_not_hide_on_read_failure() {
+        assert_eq!(simmit_pause_capability(None), true);   // transient read error → still pausable
+        assert_eq!(simmit_pause_capability(Some(1)), false);
+        assert_eq!(simmit_pause_capability(Some(3)), true);
+    }
+}
+
 /// Cap on terminal-state jobs included in the active-sims overview alongside
 /// any in-flight jobs. Tracked by `fetchActiveJobs` docs on the frontend.
 const RECENT_TERMINAL_LIMIT: usize = 20;
@@ -111,6 +157,23 @@ pub(super) async fn get_sim_status(
         .as_ref()
         .and_then(|s| serde_json::from_str(s).ok());
 
+    // `None` means the read failed (transient); `Some(n)` is the real count.
+    // Non-simmit jobs never have chunks, so they get `Some(0)` (irrelevant to
+    // the capability decision, which only fires for simmit).
+    let chunk_count: Option<i64> = if job.provider_id == "simmit" {
+        if let Some(pool) = repo.pool() {
+            crate::db::CloudChunksRepo::new(pool.clone())
+                .list_for_job(&job.id)
+                .await
+                .ok()
+                .map(|rows| rows.len() as i64) // transient error → None (unknown)
+        } else {
+            Some(0)
+        }
+    } else {
+        Some(0)
+    };
+
     HttpResponse::Ok().json(json!({
         "id": job.id,
         "status": job.status,
@@ -122,6 +185,9 @@ pub(super) async fn get_sim_status(
         "error": job.error_message,
         "simc_input_mode": job.simc_input_mode.as_str(),
         "pause_requested": job.pause_requested,
+        "provider_id": job.provider_id,
+        "chunk_count": chunk_count.unwrap_or(0), // display 0 on transient error; capability uses the Option
+        "effective_capabilities": effective_capabilities(&job.provider_id, chunk_count),
     }))
 }
 
@@ -199,6 +265,7 @@ pub(super) async fn pause_sim(path: web::Path<String>, repo: web::Data<JobRepo>)
     if let Err(e) = repo.set_pause_requested(&job_id, true).await {
         return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
     }
+    simc_runner::kill_job(&job_id);
 
     HttpResponse::Ok().json(json!({
         "status": "pause_requested",
@@ -206,11 +273,18 @@ pub(super) async fn pause_sim(path: web::Path<String>, repo: web::Data<JobRepo>)
     }))
 }
 
+// actix extractors are one-per-param; the added HttpRequest (for per-request
+// provider-key headers) pushes this to 8 — can't be collapsed.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn resume_sim(
+    http_req: actix_web::HttpRequest,
     path: web::Path<String>,
     repo: web::Data<JobRepo>,
     simc_bins: web::Data<Arc<SimcBinaries>>,
     log_buffer: web::Data<Arc<LogBuffer>>,
+    local_queue: web::Data<crate::compute::local::LocalSimQueue>,
+    registry: web::Data<Arc<crate::compute::ProviderRegistry>>,
+    settings_repo: web::Data<crate::db::SettingsRepo>,
 ) -> HttpResponse {
     let job_id = path.into_inner();
     let pool = match repo.pool() {
@@ -222,11 +296,53 @@ pub(super) async fn resume_sim(
         }
     };
 
+    // Build the per-request provider auth EXACTLY as submit does
+    // (`resolve_provider_for_request`): merge server-side ProviderSettings with
+    // the request's `X-Provider-<id>-Key` headers into a ProviderAvailability,
+    // then resolve the auth for THIS job's provider. A web BYO-key caller's key
+    // arrives only on this request; threading it lets a cloud-streaming run
+    // resume instead of being stuck paused. Best-effort: if settings can't load
+    // or the job is gone, fall through with no per-request auth and let
+    // resume_job surface the real error.
+    let request_auth = match crate::compute::ProviderSettings::load(
+        settings_repo.get_ref(),
+        &registry.remote_ids(),
+    )
+    .await
+    {
+        Ok(settings) => {
+            let avail = crate::compute::ProviderAvailability::build(
+                &settings,
+                registry.get_ref(),
+                http_req.headers(),
+            );
+            match repo.get(&job_id).await {
+                Ok(Some(job)) => {
+                    let provider_id = if job.provider_id.is_empty() {
+                        "simmit"
+                    } else {
+                        job.provider_id.as_str()
+                    };
+                    avail.auth_for(provider_id)
+                }
+                _ => crate::compute::ProviderAuth::None,
+            }
+        }
+        Err(_) => crate::compute::ProviderAuth::None,
+    };
+
     let inputs = crate::profileset_generator::ResumeInputs {
         pool,
         repo: repo.get_ref().clone(),
         log_buffer: log_buffer.get_ref().clone(),
         simc_bins: simc_bins.get_ref().clone(),
+        queue: local_queue.get_ref().clone(),
+        local_provider: registry
+            .get("local")
+            .expect("local provider always registered"),
+        registry: registry.get_ref().clone(),
+        settings_repo: settings_repo.get_ref().clone(),
+        request_auth,
     };
 
     match crate::profileset_generator::resume_job(&job_id, inputs).await {

@@ -431,9 +431,18 @@ fn extract_all_gear(player: &Value) -> HashMap<String, Value> {
 }
 
 /// Extract profileset results from simc JSON output for Top Gear.
-pub fn parse_top_gear_result(
+/// Parse a profileset/gear-comparison SimC result (Top Gear, Drop Finder,
+/// Upgrade Compare, Enchant/Gem). The `sim_type` parameter is the exact
+/// wire string of the mode that produced the result; it lands in the
+/// returned payload as `"type"`.
+///
+/// This was historically named `parse_top_gear_result` back when Top Gear
+/// was the only caller. After the SimMode/ResultKind split and sim_type
+/// parameterization, the broader name reflects the actual contract.
+pub fn parse_gear_comparison_result(
     raw: &Value,
     combo_metadata: Option<&HashMap<String, Vec<Value>>>,
+    sim_type: &str,
 ) -> Value {
     let empty_meta = HashMap::new();
     let combo_metadata = combo_metadata.unwrap_or(&empty_meta);
@@ -444,7 +453,7 @@ pub fn parse_top_gear_result(
 
     let players = match players {
         Some(p) if !p.is_empty() => p,
-        _ => return json!({"type": "top_gear", "error": "No player data found"}),
+        _ => return json!({"type": sim_type, "result_kind": "gear_comparison", "error": "No player data found"}),
     };
 
     let player = &players[0];
@@ -586,10 +595,14 @@ pub fn parse_top_gear_result(
         .get("elapsed_time_seconds")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+    // Cloud-merged results carry no `sim.statistics`; fall back to the configured
+    // `max_time` (a fixed-length fight's mean ≈ max_time) so the footer shows the
+    // fight length instead of 0. Local always has statistics, so this is a no-op.
     let fight_length = statistics
         .get("simulation_length")
         .and_then(|sl| sl.get("mean"))
         .and_then(|m| m.as_f64())
+        .or_else(|| options.get("max_time").and_then(|v| v.as_f64()))
         .unwrap_or(0.0);
     let target_error = options
         .get("target_error")
@@ -611,7 +624,8 @@ pub fn parse_top_gear_result(
     let dps_error_abs = base_dps * error_pct / 100.0;
 
     json!({
-        "type": "top_gear",
+        "type": sim_type,
+        "result_kind": "gear_comparison",
         "base_dps": round1(base_dps),
         "dps_error": round1(dps_error_abs),
         "dps_error_pct": round2(error_pct),
@@ -633,16 +647,29 @@ pub fn parse_top_gear_result(
     })
 }
 
-/// 95% CI half-width as a percent of the mean, read from a simc result block
-/// that carries a `mean_std_dev` field (works for both player.collected_data.dps
-/// and individual profileset entries — same shape). Returns `None` when the
-/// input lacks the field or the mean is zero.
+/// 95% CI half-width as a percent of the mean, read from a simc result block.
+///
+/// The two block shapes name the standard error of the mean DIFFERENTLY:
+/// `player.collected_data.dps` uses `mean_std_dev`, while a `profilesets.results`
+/// entry uses `mean_stddev` (and also exposes `mean_error` = 1.96 × that, i.e. the
+/// 95% CI half-width already). Accept all three so the badge renders for both —
+/// reading only `mean_std_dev` silently returned `None` for every profileset row.
+/// Returns `None` when no error field is present or the mean is zero.
 fn precision_pct_from_simc(block: &Value, mean: f64) -> Option<f64> {
     if mean <= 0.0 {
         return None;
     }
-    let mean_std_dev = block.get("mean_std_dev").and_then(|v| v.as_f64())?;
-    Some(1.96 * mean_std_dev / mean * 100.0)
+    // Standard error of the mean, under either field name → 1.96× for 95% CI.
+    if let Some(sem) = block
+        .get("mean_std_dev")
+        .or_else(|| block.get("mean_stddev"))
+        .and_then(|v| v.as_f64())
+    {
+        return Some(1.96 * sem / mean * 100.0);
+    }
+    // `mean_error` is already the 95% half-width (absolute).
+    let mean_error = block.get("mean_error").and_then(|v| v.as_f64())?;
+    Some(mean_error / mean * 100.0)
 }
 
 fn round1(v: f64) -> f64 {
@@ -655,4 +682,77 @@ fn round2(v: f64) -> f64 {
 
 fn round4(v: f64) -> f64 {
     (v * 10000.0).round() / 10000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find_row<'a>(parsed: &'a Value, name: &str) -> &'a Value {
+        parsed["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .expect("row present")
+    }
+
+    /// Regression: SimC profileset result rows name the standard error of the
+    /// mean `mean_stddev` (NOT `mean_std_dev`, which is the main-actor spelling),
+    /// so reading only `mean_std_dev` left every per-row precision badge `null`.
+    /// Field values are a real simc profileset row from `simc.exe`.
+    #[test]
+    fn profileset_precision_badge_reads_mean_stddev() {
+        let raw = json!({
+            "sim": {
+                "players": [{
+                    "name": "Base",
+                    "collected_data": { "dps": { "mean": 1000.0, "mean_std_dev": 2.0 } }
+                }],
+                "profilesets": { "results": [
+                    { "name": "Combo 1", "mean": 399.4572212376752,
+                      "mean_stddev": 1.4333896936395902, "mean_error": 2.809392176589867 }
+                ] }
+            }
+        });
+        let parsed = parse_gear_comparison_result(&raw, None, "top_gear");
+        // 1.96 * 1.43339 / 399.457 * 100 = 0.70%
+        assert_eq!(find_row(&parsed, "Combo 1")["precision_pct"].as_f64(), Some(0.70));
+    }
+
+    /// Rows that carry only `mean_error` (the 95% half-width, absolute) still
+    /// resolve a precision percent.
+    #[test]
+    fn profileset_precision_badge_falls_back_to_mean_error() {
+        let raw = json!({
+            "sim": {
+                "players": [{
+                    "name": "Base",
+                    "collected_data": { "dps": { "mean": 1000.0, "mean_std_dev": 2.0 } }
+                }],
+                "profilesets": { "results": [
+                    { "name": "Combo 1", "mean": 400.0, "mean_error": 2.8 }
+                ] }
+            }
+        });
+        let parsed = parse_gear_comparison_result(&raw, None, "top_gear");
+        // 2.8 / 400 * 100 = 0.70%
+        assert_eq!(find_row(&parsed, "Combo 1")["precision_pct"].as_f64(), Some(0.70));
+    }
+
+    /// Cloud-merged results carry `sim.options` but no `sim.statistics`; the
+    /// footer's fight length falls back to the configured `max_time` instead of 0.
+    #[test]
+    fn fight_length_falls_back_to_max_time_without_statistics() {
+        let raw = json!({
+            "sim": {
+                "players": [{ "name": "Base", "collected_data": { "dps": { "mean": 1000.0 } } }],
+                "profilesets": { "results": [] },
+                "options": { "max_time": 300.0, "target_error": 0.1 }
+            }
+        });
+        let parsed = parse_gear_comparison_result(&raw, None, "top_gear");
+        assert_eq!(parsed["fight_length"].as_f64(), Some(300.0));
+        assert_eq!(parsed["target_error"].as_f64(), Some(0.1));
+    }
 }

@@ -8,13 +8,19 @@ import { useSimContext } from '../components/sim-config/SimContext';
 import { useSimSubmit } from '../lib/useSimSubmit';
 import TalentPicker from '../components/talents/TalentPicker';
 import GearOverview from '../components/gear/GearOverview';
-import type { GearItem } from '../components/gear/GearOverview';
 import ConfigFooter from '../components/sim-config/ConfigPanel';
 import { specDisplayName } from '../lib/types';
 import { API_URL } from '../lib/api';
-import type { ResolveGearResponse } from '../lib/types';
+import { useResolvedGear, equippedGearItems } from '../lib/useResolvedGear';
 import { useLanguage } from '../lib/i18n';
+import { useEnchantInfo, useGemInfo, useItemInfo } from '../lib/useItemInfo';
 import { parseCharacterInfo } from '../lib/character';
+import { useComputeChoice } from '../lib/useComputeChoice';
+import {
+  collectEnchantIds,
+  collectGemIds,
+  collectItemQueries,
+} from '../components/gear/gearOverviewUtils';
 
 interface LastSim {
   id: string;
@@ -47,57 +53,25 @@ function useLastSim(name: string | null, realm: string | null): LastSim | null {
   return lastSim;
 }
 
-function useEquippedGear(simcInput: string): Record<string, GearItem> | null {
-  const [gear, setGear] = useState<Record<string, GearItem> | null>(null);
-
-  useEffect(() => {
-    if (simcInput.trim().length < 10) {
-      setGear(null);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/gear/resolve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ simc_input: simcInput, max_upgrade: false, catalyst: false }),
-        });
-        if (!res.ok) return;
-        const data: ResolveGearResponse = await res.json();
-        const gearMap: Record<string, GearItem> = {};
-        for (const [slot, resolution] of Object.entries(data.slots)) {
-          if (resolution.equipped) {
-            const eq = resolution.equipped;
-            gearMap[slot] = {
-              slot: eq.slot,
-              item_id: eq.item_id,
-              ilevel: eq.ilevel,
-              name: eq.name,
-              bonus_ids: eq.bonus_ids,
-              enchant_id: eq.enchant_id || undefined,
-              gem_id: eq.gem_id || undefined,
-            };
-          }
-        }
-        if (Object.keys(gearMap).length > 0) setGear(gearMap);
-        else setGear(null);
-      } catch {
-        setGear(null);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [simcInput]);
-
-  return gear;
-}
-
 export default function QuickSimPage() {
   const { simcInput, hasInput, statWeights } = useSimContext();
   const { t } = useLanguage();
+  const [compute, setCompute] = useComputeChoice('quick');
 
   const characterInfo = useMemo(() => parseCharacterInfo(simcInput), [simcInput]);
   const lastSim = useLastSim(characterInfo?.name ?? null, characterInfo?.realm ?? null);
-  const equippedGear = useEquippedGear(simcInput);
+  const { resolved } = useResolvedGear(simcInput);
+  const equippedGear = useMemo(() => equippedGearItems(resolved), [resolved]);
+
+  const goItemQueries = useMemo(
+    () => collectItemQueries(equippedGear ?? {}),
+    [equippedGear]
+  );
+  const goEnchantIds = useMemo(() => collectEnchantIds(equippedGear ?? {}), [equippedGear]);
+  const goGemIds = useMemo(() => collectGemIds(equippedGear ?? {}), [equippedGear]);
+  const goItemInfo = useItemInfo(goItemQueries);
+  const goEnchantInfo = useEnchantInfo(goEnchantIds);
+  const goGemInfo = useGemInfo(goGemIds);
 
   const insetUrl =
     characterInfo?.realm && characterInfo?.name
@@ -113,8 +87,9 @@ export default function QuickSimPage() {
     () => ({
       simc_input: simcInput,
       sim_type: statWeights ? 'stat_weights' : 'quick',
+      compute_provider: compute,
     }),
-    [simcInput, statWeights]
+    [simcInput, statWeights, compute]
   );
 
   const validate = useCallback(() => {
@@ -197,6 +172,9 @@ export default function QuickSimPage() {
           gear={equippedGear}
           title={t('gear.equippedGear')}
           characterRenderUrl={renderUrl}
+          itemInfoMap={goItemInfo}
+          enchantInfoMap={goEnchantInfo}
+          gemInfoMap={goGemInfo}
         />
       )}
 
@@ -208,6 +186,8 @@ export default function QuickSimPage() {
         buttonLabel={buttonLabel(t('button.runSimulation'))}
         disabled={!hasInput}
         showStatWeightsToggle
+        compute={compute}
+        onComputeChange={setCompute}
       />
     </div>
   );

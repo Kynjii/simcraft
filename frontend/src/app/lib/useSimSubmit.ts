@@ -1,12 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSimContext } from '../components/sim-config/SimContext';
-import { API_URL, fetchActiveJobs } from './api';
+import { API_URL, providerKeyHeaders } from './api';
 import { useLanguage } from './i18n';
-import { decodeHeader } from './talentDecode';
-import { SPEC_ID_TO_NAME } from './types';
 import type { FightScenario } from './types';
 import { storeScenarioSiblings, clearScenarioSiblings } from './scenario-siblings';
+import { useSharedSimPayload } from './useSharedSimPayload';
 
 interface UseSimSubmitOptions {
   /** API endpoint path, e.g. "/api/sim" */
@@ -30,40 +29,9 @@ export function useSimSubmit({
 }: UseSimSubmitOptions) {
   const { t } = useLanguage();
   const router = useRouter();
-  const {
-    fightStyle,
-    threads,
-    selectedTalent,
-    targetCount,
-    fightLength,
-    targetError,
-    customApl,
-    rotationMode,
-    simcHeader,
-    simcBasePlayer,
-    simcRaidActors,
-    simcPostCombos,
-    simcFooter,
-    raidBuffs,
-    consumables,
-    expansionOptions,
-    simcBranch,
-    scenarios,
-    clearScenarios,
-    parallelProfilesets,
-    triageMaxBatchProfilesets,
-  } = useSimContext();
+  const { fightStyle, targetCount, fightLength, scenarios, clearScenarios } = useSimContext();
 
-  // Derive spec from selected talent string so the backend can override spec= in the SimC input
-  const specOverride = useMemo(() => {
-    if (!selectedTalent) return '';
-    try {
-      const { specId } = decodeHeader(selectedTalent);
-      return SPEC_ID_TO_NAME[specId] ?? '';
-    } catch {
-      return '';
-    }
-  }, [selectedTalent]);
+  const sharedSimPayload = useSharedSimPayload();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -79,27 +47,11 @@ export function useSimSubmit({
       }
     }
 
-    // Soft warning if other sims are already running. v1 uses confirm()
-    // — a styled modal is a future polish.
-    //
-    // Intentionally narrower than isActiveStatus: Paused jobs are "active"
-    // for UI purposes (still incomplete) but don't compete for CPU here, so
-    // they don't trigger the warning.
-    try {
-      const active = await fetchActiveJobs();
-      const activeCount = active.filter((j) => ['pending', 'running'].includes(j.status)).length;
-      if (activeCount >= 1) {
-        const stronger = activeCount >= 2;
-        const message = stronger
-          ? `You have ${activeCount} sims already running. Adding another will slow them all down significantly. Consider pausing one of the active sims first. Continue anyway?`
-          : `You have 1 sim already running. Each simc uses all CPU cores by default — running multiple at once will slow each one down proportionally. Continue?`;
-        if (!window.confirm(message)) {
-          return;
-        }
-      }
-    } catch {
-      // If the active-list fetch fails, fall through silently — don't block submission on a stat call.
-    }
+    // No pre-submit warning. The backend queues local sims (see
+    // LocalSimcProvider) and Simmit handles its own queue, so simultaneous
+    // submits can't actually fight for resources. While a sim waits in the
+    // local queue the SimStatus screen surfaces "Queued · waiting for active
+    // local sim to finish" via the standard progress channel.
 
     const pagePayload = buildPayload();
     if (pagePayload === null) return;
@@ -115,49 +67,19 @@ export function useSimSubmit({
 
       const sharedPayload = {
         ...pagePayload,
-        iterations: 100000,
-        target_error: targetError,
-        threads,
+        ...sharedSimPayload,
         ...(batchId ? { batch_id: batchId } : {}),
-        ...(selectedTalent ? { talents: selectedTalent } : {}),
-        ...(specOverride ? { spec_override: specOverride } : {}),
-        ...(customApl ? { custom_apl: customApl } : {}),
-        ...(rotationMode !== 'default' ? { rotation_mode: rotationMode } : {}),
-        ...(simcHeader ? { simc_header: simcHeader } : {}),
-        ...(simcBasePlayer ? { simc_base_player: simcBasePlayer } : {}),
-        ...(simcRaidActors ? { simc_raid_actors: simcRaidActors } : {}),
-        ...(simcPostCombos ? { simc_post_combos: simcPostCombos } : {}),
-        ...(simcFooter ? { simc_footer: simcFooter } : {}),
-        ...(parallelProfilesets ? {} : { parallel_profilesets: false }),
-        triage_max_batch_profilesets: triageMaxBatchProfilesets,
-        // Raid buffs: only send overrides for disabled buffs
-        ...(Object.values(raidBuffs).some((v) => !v)
-          ? {
-              raid_buffs: Object.fromEntries(
-                Object.entries(raidBuffs).map(([k, v]) => [k, v ? 1 : 0])
-              ),
-            }
-          : {}),
-        // Consumables: only send non-empty selections
-        ...(Object.values(consumables).some((v) => v)
-          ? { consumables: Object.fromEntries(Object.entries(consumables).filter(([, v]) => v)) }
-          : {}),
-        // Expansion options: only send overrides for disabled options
-        ...(Object.values(expansionOptions).some((v) => !v)
-          ? {
-              expansion_options: Object.fromEntries(
-                Object.entries(expansionOptions).map(([k, v]) => [k, v ? 1 : 0])
-              ),
-            }
-          : {}),
-        ...(simcBranch ? { simc_branch: simcBranch } : {}),
       };
 
+      const computeChoice = (sharedPayload as { compute_provider?: string }).compute_provider;
       const results = await Promise.allSettled(
         configs.map(async (config) => {
           const res = await fetch(`${API_URL}${endpoint}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...providerKeyHeaders(computeChoice),
+            },
             body: JSON.stringify({
               ...sharedPayload,
               fight_style: config.fightStyle,
@@ -217,27 +139,11 @@ export function useSimSubmit({
     onBeforeNavigate,
     router,
     fightStyle,
-    threads,
-    selectedTalent,
     targetCount,
     fightLength,
-    targetError,
-    customApl,
-    rotationMode,
-    simcHeader,
-    simcBasePlayer,
-    simcRaidActors,
-    simcPostCombos,
-    simcFooter,
-    raidBuffs,
-    consumables,
-    expansionOptions,
-    simcBranch,
-    specOverride,
+    sharedSimPayload,
     scenarios,
     clearScenarios,
-    parallelProfilesets,
-    triageMaxBatchProfilesets,
     t,
   ]);
 

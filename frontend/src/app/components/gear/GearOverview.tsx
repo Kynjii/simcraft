@@ -2,9 +2,9 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useMemo } from 'react';
-import { useEnchantInfo, useGemInfo, useItemInfo } from '../../lib/useItemInfo';
+import { type EnchantInfo, type GemInfo, type ItemInfo } from '../../lib/useItemInfo';
 import { useLanguage } from '../../lib/i18n';
-import { useWowheadTooltips } from '../../lib/useWowheadTooltips';
+import { useWowheadTooltips, wowheadKeyFor } from '../../lib/useWowheadTooltips';
 import GearSlotRow from './GearSlotRow';
 import {
   GEAR_ORDER_BOTTOM,
@@ -12,7 +12,6 @@ import {
   GEAR_ORDER_RIGHT,
   type GearItem,
 } from './gearOverviewTypes';
-import { collectEnchantIds, collectGemIds, collectItemQueries } from './gearOverviewUtils';
 
 interface GearOverviewProps {
   gear: Record<string, GearItem>;
@@ -20,6 +19,9 @@ interface GearOverviewProps {
   characterRenderUrl?: string | null;
   upgradeSlots?: Set<string>;
   downgradeSlots?: Set<string>;
+  itemInfoMap: Record<number, ItemInfo>;
+  enchantInfoMap: Record<number, EnchantInfo>;
+  gemInfoMap: Record<number, GemInfo>;
 }
 
 export type { GearItem } from './gearOverviewTypes';
@@ -30,20 +32,18 @@ export default function GearOverview({
   characterRenderUrl,
   upgradeSlots,
   downgradeSlots,
+  itemInfoMap,
+  enchantInfoMap,
+  gemInfoMap,
 }: GearOverviewProps) {
   const { t } = useLanguage();
   const resolvedTitle = title ?? t('gear.equippedGear');
 
-  const allItemQueries = useMemo(() => collectItemQueries(gear), [gear]);
-  const itemInfoMap = useItemInfo(allItemQueries);
-
-  const allEnchantIds = useMemo(() => collectEnchantIds(gear), [gear]);
-  const enchantInfoMap = useEnchantInfo(allEnchantIds);
-
-  const allGemIds = useMemo(() => collectGemIds(gear), [gear]);
-  const gemInfoMap = useGemInfo(allGemIds);
-
-  useWowheadTooltips([itemInfoMap]);
+  const wowheadKey = useMemo(
+    () => wowheadKeyFor({ item: itemInfoMap, enchant: enchantInfoMap, gem: gemInfoMap }),
+    [itemInfoMap, enchantInfoMap, gemInfoMap]
+  );
+  useWowheadTooltips([wowheadKey]);
 
   if (Object.keys(gear).length === 0) {
     return null;

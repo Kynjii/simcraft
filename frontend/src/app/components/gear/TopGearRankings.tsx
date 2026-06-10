@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { simRow } from '../../lib/api';
 import { SLOT_LABELS, specDisplayName } from '../../lib/types';
 import {
@@ -26,19 +27,79 @@ function comboIdFromName(name: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-/** Color band for a precision value (95% CI half-width as % of mean).
- * Reflects how trustworthy the displayed DPS is, not what was targeted.
- *   ≤0.5% → green     (Final-pass precision)
- *   ≤1.0% → emerald   (Refine band)
- *   ≤2.0% → yellow    (Coarse band)
- *   ≤4.0% → orange    (Probe / rough)
+/** Dot fill for a precision value (95% CI half-width as % of mean) — how
+ * trustworthy the displayed DPS is, not what was targeted. Greener = tighter.
+ *   ≤0.5% → green     (final-pass precision)
+ *   ≤1.0% → emerald   (refine band)
+ *   ≤2.0% → yellow    (coarse band)
+ *   ≤4.0% → orange    (probe / rough)
  *   >4.0% → red       (early-stage prune, treat with caution) */
-function precisionTone(pct: number): string {
-  if (pct <= 0.5) return 'text-emerald-300/80';
-  if (pct <= 1.0) return 'text-emerald-400/70';
-  if (pct <= 2.0) return 'text-yellow-300/80';
-  if (pct <= 4.0) return 'text-orange-300/80';
-  return 'text-red-400/80';
+function precisionDotTone(pct: number): string {
+  if (pct <= 0.5) return 'bg-emerald-400';
+  if (pct <= 1.0) return 'bg-emerald-500';
+  if (pct <= 2.0) return 'bg-yellow-400';
+  if (pct <= 4.0) return 'bg-orange-400';
+  return 'bg-red-500';
+}
+
+/** Short band name shown as the precision tooltip header (mirrors the dot tone). */
+function precisionBandLabel(pct: number): string {
+  if (pct <= 0.5) return 'Final-pass precision';
+  if (pct <= 1.0) return 'Refine band';
+  if (pct <= 2.0) return 'Coarse band';
+  if (pct <= 4.0) return 'Probe / rough';
+  return 'Early-stage prune';
+}
+
+/** A precision dot with a styled hover card. The card is portal-rendered at a
+ * fixed position so it escapes the row's `overflow-hidden` (the DPS bar clip);
+ * a plain CSS popover would be cropped at the row edge. */
+function PrecisionDot({ pct, targetError }: { pct: number; targetError?: number }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [tip, setTip] = useState<{ top: number; left: number } | null>(null);
+
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) setTip({ top: r.top, left: r.right });
+  };
+
+  return (
+    <span
+      ref={ref}
+      onMouseEnter={show}
+      onMouseLeave={() => setTip(null)}
+      className="flex items-center"
+    >
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full ${precisionDotTone(pct)}`}
+        aria-label={`accuracy ±${pct.toFixed(2)} percent`}
+      />
+      {tip &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ position: 'fixed', top: tip.top - 8, left: tip.left }}
+            className="pointer-events-none z-[60] -translate-x-full -translate-y-full rounded-lg border border-outline-variant/20 bg-surface-container-highest px-3 py-2 shadow-xl"
+          >
+            <div className="flex items-center gap-1.5">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${precisionDotTone(pct)}`} />
+              <span className="whitespace-nowrap text-[11px] font-semibold text-on-surface">
+                {precisionBandLabel(pct)}
+              </span>
+            </div>
+            <div className="mt-1 whitespace-nowrap font-mono text-[11px] leading-tight tabular-nums text-on-surface-variant">
+              ±{pct.toFixed(2)}% <span className="text-on-surface-variant/50">· 95% CI</span>
+            </div>
+            {targetError != null && (
+              <div className="whitespace-nowrap font-mono text-[11px] leading-tight tabular-nums text-on-surface-variant/60">
+                target {targetError.toFixed(2)}%
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
+    </span>
+  );
 }
 
 /** The result page only ever surfaces the top N rows — past ~10 the deltas
@@ -51,6 +112,8 @@ interface TopGearRankingsProps {
   results: TopGearResult[];
   maxDps: number;
   baseDps: number;
+  /** Configured target_error (%), shown in the per-row precision tooltip. */
+  targetError?: number;
   hasEncounterData: boolean;
   groupMode: GroupMode;
   onGroupModeChange: (mode: GroupMode) => void;
@@ -67,6 +130,7 @@ export default function TopGearRankings({
   results,
   maxDps,
   baseDps,
+  targetError,
   hasEncounterData,
   groupMode,
   onGroupModeChange,
@@ -167,10 +231,11 @@ export default function TopGearRankings({
                       baseDps={baseDps}
                       isBest={result === results[0] && result.delta > 0}
                       isSelected={result.name === (selectedResultName || results[0]?.name)}
-                      onSelect={() => onSelectResult(result.name)}
+                      onSelect={onSelectResult}
                       itemInfoMap={itemInfoMap}
                       enchantInfoMap={enchantInfoMap}
                       gemInfoMap={gemInfoMap}
+                      targetError={targetError}
                       sourceJobId={verifyEnabled ? sourceJobId : undefined}
                     />
                   ))}
@@ -184,6 +249,7 @@ export default function TopGearRankings({
           results={results}
           maxDps={maxDps}
           baseDps={baseDps}
+          targetError={targetError}
           itemInfoMap={itemInfoMap}
           enchantInfoMap={enchantInfoMap}
           gemInfoMap={gemInfoMap}
@@ -200,6 +266,7 @@ function RankedResults({
   results,
   maxDps,
   baseDps,
+  targetError,
   itemInfoMap,
   enchantInfoMap,
   gemInfoMap,
@@ -210,6 +277,7 @@ function RankedResults({
   results: TopGearResult[];
   maxDps: number;
   baseDps: number;
+  targetError?: number;
   itemInfoMap: Record<number, ItemInfo>;
   enchantInfoMap: Record<number, EnchantInfo>;
   gemInfoMap: Record<number, GemInfo>;
@@ -228,9 +296,10 @@ function RankedResults({
           rank={idx + 1}
           maxDps={maxDps}
           baseDps={baseDps}
+          targetError={targetError}
           isBest={idx === 0 && result.delta > 0}
           isSelected={result.name === (selectedResultName || results[0]?.name)}
-          onSelect={() => onSelectResult(result.name)}
+          onSelect={onSelectResult}
           itemInfoMap={itemInfoMap}
           enchantInfoMap={enchantInfoMap}
           gemInfoMap={gemInfoMap}
@@ -241,11 +310,12 @@ function RankedResults({
   );
 }
 
-function ResultRow({
+const ResultRow = memo(function ResultRow({
   result,
   rank,
   maxDps,
   baseDps,
+  targetError,
   isBest,
   isSelected,
   onSelect,
@@ -258,9 +328,10 @@ function ResultRow({
   rank?: number;
   maxDps: number;
   baseDps: number;
+  targetError?: number;
   isBest: boolean;
   isSelected?: boolean;
-  onSelect?: () => void;
+  onSelect?: (name: string) => void;
   itemInfoMap: Record<number, ItemInfo>;
   enchantInfoMap: Record<number, EnchantInfo>;
   gemInfoMap: Record<number, GemInfo>;
@@ -308,7 +379,7 @@ function ResultRow({
 
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect?.(result.name)}
       className={`relative cursor-pointer overflow-hidden rounded-lg transition-colors hover:bg-white/[0.04] ${
         isSelected && !isBest
           ? 'bg-emerald-500/[0.04] ring-1 ring-emerald-500/50'
@@ -405,17 +476,12 @@ function ResultRow({
               </span>
             )}
           </span>
-          <span className="flex w-16 flex-col items-end">
+          <span className="flex w-20 items-center justify-end gap-1.5">
             <span className="font-mono text-sm tabular-nums text-on-surface">
               {Math.round(result.dps).toLocaleString()}
             </span>
             {result.precision_pct != null && (
-              <span
-                className={`font-mono text-[10px] tabular-nums leading-none ${precisionTone(result.precision_pct)}`}
-                title={`95% confidence interval: ±${result.precision_pct.toFixed(2)}% of mean DPS`}
-              >
-                ±{result.precision_pct.toFixed(result.precision_pct >= 1 ? 1 : 2)}%
-              </span>
+              <PrecisionDot pct={result.precision_pct} targetError={targetError} />
             )}
           </span>
           {showVerifyButton && (
@@ -442,7 +508,7 @@ function ResultRow({
       </div>
     </div>
   );
-}
+});
 
 function ItemTag({
   item,

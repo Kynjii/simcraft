@@ -1,6 +1,7 @@
 use crate::types::RotationMode;
 use regex::Regex;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
@@ -136,11 +137,13 @@ fn max_threads() -> u32 {
 }
 
 /// Resolve the thread count from the API options.
-/// A value of 0 (or absent) means use all available threads.
+/// A value of 0 (or absent) means use the local-friendly default: reserve a
+/// couple of logical CPUs for the desktop app/backend. Explicit thread counts
+/// are still honored up to the machine limit.
 fn resolve_threads(options: &Value) -> u32 {
     let requested = options.get("threads").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     if requested == 0 {
-        max_threads()
+        max_threads().saturating_sub(2).max(1)
     } else {
         requested.min(max_threads()).max(1)
     }
@@ -165,26 +168,18 @@ const EXPANSION_OPTIONS: &[&str] = &[
     "midnight.crucible_of_erratic_energies_predation=1",
 ];
 
+#[derive(Debug, Clone)]
 struct Stage {
-    name: &'static str,
+    name: Cow<'static, str>,
     target_error: f64,
 }
 
 /// Coarse-to-fine candidate stages used to construct the adaptive schedule.
 /// Each entry produces an intermediate stage when its target_error is strictly
-/// looser than the user's requested precision. SimC's per-profileset auto-tuner
-/// decides iteration count from the `target_error`; we no longer cap iterations
-/// per stage so a Probe stage actually delivers its 2.0% precision (a 50-iter
-/// cap previously left it at ~5% noise).
-const STAGE_CANDIDATES: &[(f64, &str)] = &[
-    (2.0, "Probe"),
-    (1.0, "Coarse"),
-    (0.5, "Refine"),
-    (0.2, "Medium"),
-    (0.1, "Fine"),
-    (0.05, "Trace"),
-    (0.02, "Ultra"),
-];
+/// looser than the user's requested precision. The local pipeline benchmark
+/// favored this short Simmit-style ladder: it kept high-spread topgear runs
+/// competitive while avoiding expensive extra passes on low-spread gem cases.
+const STAGE_CANDIDATES: &[(f64, &str)] = &[(1.0, "Broad"), (0.5, "Refine")];
 
 /// Build the staged schedule for the user's requested `target_error`.
 ///
@@ -194,22 +189,94 @@ const STAGE_CANDIDATES: &[(f64, &str)] = &[
 /// `STAGE_CUTOFF_MULTIPLIER * target_error` of the top (and baseline) mean.
 ///
 /// Examples:
-///   0.2  -> Probe, Coarse, Refine, Final(0.2)         (4 stages)
-///   0.05 -> Probe, Coarse, Refine, Medium, Fine, Final(0.05)   (6 stages)
-///   0.01 -> ..., Trace, Ultra, Final(0.01)            (8 stages)
+///   0.2  -> Broad, Refine, Final(0.2)     (3 stages)
+///   0.05 -> Broad, Refine, Final(0.05)    (3 stages)
+///   0.01 -> Broad, Refine, Final(0.01)    (3 stages)
 fn build_stage_schedule(user_target_error: f64) -> Vec<Stage> {
     let mut schedule: Vec<Stage> = STAGE_CANDIDATES
         .iter()
         .filter(|(te, _)| *te > user_target_error)
         .map(|(te, name)| Stage {
-            name,
+            name: Cow::Borrowed(name),
             target_error: *te,
         })
         .collect();
     schedule.push(Stage {
-        name: "Final",
+        name: Cow::Borrowed("Final"),
         target_error: user_target_error,
     });
+    schedule
+}
+
+/// Parse a `stage_schedule` JSON array into `(name, target_error)` pairs,
+/// dropping stages at or below the user's final precision. Each item is either a
+/// bare number (`1.0`) or an object (`{"name":"Broad","target_error":1.0}` /
+/// `{"te":1.0}`); unnamed stages are auto-named `Stage N`. Shared by the staged
+/// runner and the local stage pipeline so the item parsing lives in one place.
+pub(crate) fn parse_stage_schedule_array(
+    arr: &[Value],
+    user_target_error: f64,
+) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    for (idx, item) in arr.iter().enumerate() {
+        let Some(target_error) = item.as_f64().or_else(|| {
+            item.get("target_error")
+                .or_else(|| item.get("te"))
+                .and_then(|v| v.as_f64())
+        }) else {
+            continue;
+        };
+        if target_error <= user_target_error {
+            continue;
+        }
+        let name = item
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("Stage {}", idx + 1));
+        out.push((name, target_error));
+    }
+    out
+}
+
+/// Test/benchmark override for the staged schedule. Production does not send
+/// this option; the calibration bench uses it to compare alternative brackets
+/// through the same local staged runner. Accepted shapes:
+/// - `"current"` / absent: normal production schedule
+/// - `[1.0, 0.5]`: named automatically as Stage 1, Stage 2
+/// - `[{"name":"Broad","target_error":1.0}]`
+///
+/// The final user target is always appended, unless the override already ends
+/// at that exact target.
+fn build_stage_schedule_from_options(options: &Value, user_target_error: f64) -> Vec<Stage> {
+    let Some(raw) = options.get("stage_schedule") else {
+        return build_stage_schedule(user_target_error);
+    };
+    if raw.as_str() == Some("current") {
+        return build_stage_schedule(user_target_error);
+    }
+    let Some(arr) = raw.as_array() else {
+        return build_stage_schedule(user_target_error);
+    };
+
+    let mut schedule: Vec<Stage> = parse_stage_schedule_array(arr, user_target_error)
+        .into_iter()
+        .map(|(name, target_error)| Stage {
+            name: Cow::Owned(name),
+            target_error,
+        })
+        .collect();
+
+    let append_final = schedule
+        .last()
+        .map(|s| (s.target_error - user_target_error).abs() > f64::EPSILON)
+        .unwrap_or(true);
+    if append_final {
+        schedule.push(Stage {
+            name: Cow::Borrowed("Final"),
+            target_error: user_target_error,
+        });
+    }
     schedule
 }
 
@@ -270,9 +337,9 @@ const SKIP_TO_FINAL_THRESHOLD: usize = 5;
 
 /// Iteration count simc receives for `stage`. Used purely as a safety ceiling
 /// — `target_error` drives the per-profileset iteration count, and simc stops
-/// once that precision is hit. Looser stages converge quickly; tight stages
-/// (Trace / Ultra / Final) can need most of the user's budget. The user's
-/// iteration budget is the right cap for every stage.
+/// once that precision is hit. Looser stages converge quickly; the final stage
+/// can need most of the user's budget. The user's iteration budget is the right
+/// cap for every stage.
 fn iterations_for_stage(_stage: &Stage, user_iters: u32) -> u32 {
     user_iters
 }
@@ -447,34 +514,65 @@ impl<'a> SimcInputBuild<'a> {
     }
 }
 
+/// The user-controlled simulation parameters parsed once from the options
+/// `Value`. Single source of truth for defaults so the various entry points
+/// (`build_simc_input_from_options`, `run_simc`, `run_simc_staged`,
+/// `run_simc_triage_batch`) can no longer drift apart.
+///
+/// The `unwrap_or` defaults here (0.1 target_error, 10_000 iterations, etc.)
+/// are a safety net only: every production caller populates these via
+/// `SimOptions::to_json()`, so the defaults are not normally reached. They are
+/// chosen to match `build_simc_input_from_options`' historical values.
+#[derive(Debug, Clone)]
+pub struct SimParams {
+    pub fight_style: String,
+    pub target_error: f64,
+    pub iterations: u32,
+    pub desired_targets: u32,
+    pub max_time: u32,
+    pub single_actor_batch: bool,
+}
+
+impl SimParams {
+    pub fn from_options(options: &Value) -> Self {
+        Self {
+            fight_style: options
+                .get("fight_style")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Patchwerk")
+                .to_string(),
+            target_error: options
+                .get("target_error")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.1),
+            // Clamp to a sane range so hand-crafted requests can't ask for
+            // absurd iteration counts (same spirit as `resolve_threads`).
+            iterations: (options
+                .get("iterations")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10_000) as u32)
+                .clamp(100, 1_000_000),
+            desired_targets: options
+                .get("desired_targets")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32,
+            max_time: options
+                .get("max_time")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(300) as u32,
+            single_actor_batch: options
+                .get("single_actor_batch")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        }
+    }
+}
+
 /// Build the full simc input from the options Value (convenience wrapper).
 pub fn build_simc_input_from_options(simc_input: &str, options: &Value) -> String {
-    let fight_style = options
-        .get("fight_style")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Patchwerk");
-    let target_error = options
-        .get("target_error")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.1);
-    let iterations = options
-        .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10000) as u32;
-    let desired_targets = options
-        .get("desired_targets")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as u32;
-    let max_time = options
-        .get("max_time")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(300) as u32;
+    let p = SimParams::from_options(options);
     let calculate_scale_factors =
         options.get("sim_type").and_then(|v| v.as_str()) == Some("stat_weights");
-    let single_actor_batch = options
-        .get("single_actor_batch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
     let is_dungeon_route = simc_input.lines().any(|l| {
         let t = l.trim();
         t == "fight_style=DungeonRoute" || t == "fight_style=\"DungeonRoute\""
@@ -483,13 +581,13 @@ pub fn build_simc_input_from_options(simc_input: &str, options: &Value) -> Strin
     build_full_simc_input(&SimcInputBuild::new(
         simc_input,
         options,
-        fight_style,
-        target_error,
-        iterations,
-        desired_targets,
-        max_time,
+        &p.fight_style,
+        p.target_error,
+        p.iterations,
+        p.desired_targets,
+        p.max_time,
         calculate_scale_factors,
-        single_actor_batch,
+        p.single_actor_batch,
         is_dungeon_route,
     ))
 }
@@ -632,6 +730,13 @@ pub fn build_full_simc_input(b: &SimcInputBuild) -> String {
     // Scale factors
     result.push_str("scale_only=strength,intellect,agility,crit,mastery,vers,haste,weapon_dps,weapon_offhand_dps\n");
 
+    // Fight style must precede the raid buff overrides: parsing
+    // fight_style=DungeonSlice resets all override.* values to 0, so any
+    // overrides emitted before it would be silently discarded.
+    if !is_dungeon_route {
+        result.push_str(&format!("fight_style={}\n", fight_style));
+    }
+
     // Raid buff overrides (skip for dungeon routes)
     if !is_dungeon_route {
         for opt in OVERRIDES {
@@ -661,9 +766,6 @@ pub fn build_full_simc_input(b: &SimcInputBuild) -> String {
         result.push_str("single_actor_batch=1\n");
     }
     result.push_str("optimize_expressions=1\n");
-    if !is_dungeon_route {
-        result.push_str(&format!("fight_style={}\n", fight_style));
-    }
     result.push_str(&format!("target_error={}\n", target_error));
 
     // Run profilesets in parallel (each on one thread) instead of the default
@@ -674,7 +776,7 @@ pub fn build_full_simc_input(b: &SimcInputBuild) -> String {
     //   te=0.2  (≈1.5k iters/profileset)  → roughly equal (within noise)
     //   te=0.05 (≈14k iters/profileset)   → pwt=1 is 12% slower (iter parallelism wins)
     // Cutoff at te > 0.2 enables pwt=1 only for the early staged Top Gear stages
-    // (Probe/Coarse/Refine) where the win is clear. Medium (te=0.2) and below are
+    // (Broad/Refine) where the win is clear. Medium (te=0.2) and below are
     // marginal or slower, so we leave SimC's default sequential mode in place.
     // The `parallel_profilesets` option overrides this for A/B testing.
     let combo_count = simc_input
@@ -753,8 +855,21 @@ async fn run_simc_subprocess(
         trimmed == "fight_style=DungeonRoute" || trimmed == "fight_style=\"DungeonRoute\""
     });
 
-    // Build the full input file with all options inline
-    let final_input = if raw {
+    // Build the full input file with all options inline.
+    //
+    // `prebuilt`: handler already ran the simc_input through
+    // `build_simc_input_from_options`, so we pass it through verbatim. This
+    // keeps "input creation" as a single step in the handler, no matter which
+    // provider executes the job. Stage-specific overrides (target_error,
+    // profileset_work_threads) are appended by `run_simc_staged` per stage.
+    //
+    // `raw`: legacy API-level flag (req.raw=true). Same effect for the
+    // subprocess — skip the internal build — but signals user intent.
+    let prebuilt = options
+        .get("prebuilt")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let final_input = if raw || prebuilt {
         simc_input.to_string()
     } else {
         build_full_simc_input(&SimcInputBuild::new(
@@ -961,6 +1076,26 @@ static COMBO_HEADER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^###\s+(Combo \d
 /// call (one per Triage batch / staged stage) reuses the compiled pattern.
 static PROGRESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)/(\d+)").unwrap());
 
+/// Append a `# Stage override` block to a pre-built simc input so the staged
+/// loop can override the user's `target_error` (and the parallel-profilesets
+/// decision) without rebuilding the whole input from scratch. SimC's
+/// last-wins parsing makes the appended values authoritative.
+///
+/// Only used when the caller provided a pre-built input (`opts.prebuilt = true`).
+fn append_stage_overrides(input: &str, stage_target_error: f64, want_parallel: bool) -> String {
+    let mut out = input.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("\n# Stage override\n");
+    out.push_str(&format!("target_error={}\n", stage_target_error));
+    out.push_str(&format!(
+        "profileset_work_threads={}\n",
+        if want_parallel { 1 } else { 0 }
+    ));
+    out
+}
+
 pub fn filter_simc_input(
     simc_input: &str,
     keep_combos: &std::collections::HashSet<String>,
@@ -998,34 +1133,10 @@ pub async fn run_simc(
     on_log: impl Fn(&str),
     cancel: Option<crate::cancel::CancelToken>,
 ) -> Result<SimcOutput, String> {
-    let fight_style = options
-        .get("fight_style")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Patchwerk");
-    let target_error = options
-        .get("target_error")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.2);
-    let iterations = options
-        .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1000) as u32;
+    let p = SimParams::from_options(options);
     let calculate_scale_factors =
         options.get("sim_type").and_then(|v| v.as_str()) == Some("stat_weights");
     let threads = resolve_threads(options);
-    let desired_targets = options
-        .get("desired_targets")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as u32;
-    let max_time = options
-        .get("max_time")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(300) as u32;
-
-    let single_actor_batch = options
-        .get("single_actor_batch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
 
     let raw = options
         .get("raw")
@@ -1038,14 +1149,14 @@ pub async fn run_simc(
         job_id,
         simc_input,
         options,
-        fight_style,
-        target_error,
-        iterations,
+        &p.fight_style,
+        p.target_error,
+        p.iterations,
         threads,
-        desired_targets,
-        max_time,
+        p.desired_targets,
+        p.max_time,
         calculate_scale_factors,
-        single_actor_batch,
+        p.single_actor_batch,
         "",
         true,      // generate HTML for quick sims
         |_, _| {}, // Quick sim has no profilesets to track
@@ -1164,27 +1275,12 @@ pub async fn run_simc_staged(
     on_log: impl Fn(&str) + Clone,
     cancel: Option<crate::cancel::CancelToken>,
 ) -> Result<SimcOutput, StagedRunError> {
-    let fight_style = options
-        .get("fight_style")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Patchwerk");
-    let user_iterations = options
-        .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1000) as u32;
+    let p = SimParams::from_options(options);
+    let user_iterations = p.iterations;
     let threads = resolve_threads(options);
-    let desired_targets = options
-        .get("desired_targets")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as u32;
-    let max_time = options
-        .get("max_time")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(300) as u32;
-    let single_actor_batch = options
-        .get("single_actor_batch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    let desired_targets = p.desired_targets;
+    let max_time = p.max_time;
+    let single_actor_batch = p.single_actor_batch;
 
     if combo_count < STAGED_THRESHOLD {
         if let Some(tok) = cancel.as_ref() {
@@ -1193,18 +1289,14 @@ pub async fn run_simc_staged(
             }
         }
         on_progress(5, "Simulating", &format!("{} combos", combo_count));
-        let target_error = options
-            .get("target_error")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.2);
         return run_simc_subprocess(
             simc_path,
             false, // not raw
             job_id,
             simc_input,
             options,
-            fight_style,
-            target_error,
+            &p.fight_style,
+            p.target_error,
             user_iterations,
             threads,
             desired_targets,
@@ -1237,11 +1329,24 @@ pub async fn run_simc_staged(
     // Key: combo name, Value: profileset result object from the stage where it was cut.
     let mut eliminated: HashMap<String, Value> = HashMap::new();
 
+    // When the caller pre-built the input (handler pipeline), each per-stage
+    // subprocess call needs to:
+    //   - tell the subprocess to skip rebuilding (via the cloned per-call opts)
+    //   - append target_error / profileset_work_threads overrides to the input
+    //     itself so SimC's last-wins parsing picks them up.
+    let prebuilt = options
+        .get("prebuilt")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let user_parallel_override = options
+        .get("parallel_profilesets")
+        .and_then(|v| v.as_bool());
+
     let user_target_error = options
         .get("target_error")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.05);
-    let stages = build_stage_schedule(user_target_error);
+    let stages = build_stage_schedule_from_options(options, user_target_error);
     let total_stages = stages.len();
     let final_idx = total_stages - 1;
     // Clamp start_stage_idx to a valid range. If it's past the last stage the
@@ -1275,7 +1380,7 @@ pub async fn run_simc_staged(
             progress_range_for_stage(stage_idx, total_stages, base_start);
         let stage_iters = iterations_for_stage(stage, user_iterations);
         let stage_label = stage.name.to_lowercase();
-        let stage_name_for_progress = stage.name;
+        let stage_name_for_progress = stage.name.as_ref();
 
         on_progress(
             range_start,
@@ -1295,13 +1400,20 @@ pub async fn run_simc_staged(
         // SKIP_TO_FINAL_THRESHOLD or earlier pruning, so a single run is
         // tractable in practice.
         if is_final {
+            let want_parallel =
+                user_parallel_override.unwrap_or(remaining >= 4 && stage.target_error > 0.2);
+            let final_input = if prebuilt {
+                append_stage_overrides(&current_input, stage.target_error, want_parallel)
+            } else {
+                current_input.clone()
+            };
             let stage_result = run_simc_subprocess(
                 simc_path,
                 false,
                 job_id,
-                &current_input,
+                &final_input,
                 options,
-                fight_style,
+                &p.fight_style,
                 stage.target_error,
                 stage_iters,
                 threads,
@@ -1329,6 +1441,10 @@ pub async fn run_simc_staged(
             )
             .await
             .map_err(StagedRunError::from)?;
+            let mut stage_result = stage_result;
+            let final_names = profileset_result_names(&stage_result.json);
+            stage_result.json["simhammer"]["final_profileset_names"] =
+                Value::Array(final_names.into_iter().map(Value::String).collect());
             result = Some(stage_result);
             on_stage_complete(&format!("{} · {} combos · done", stage.name, remaining));
             break;
@@ -1355,7 +1471,18 @@ pub async fn run_simc_staged(
         #[allow(clippy::needless_range_loop)]
         for batch_idx in batch_start..total_batches {
             let batch_names_set: HashSet<String> = batches[batch_idx].iter().cloned().collect();
-            let batch_input = filter_simc_input(&current_input, &batch_names_set);
+            let filtered = filter_simc_input(&current_input, &batch_names_set);
+            // Intermediate stages force per-profileset parallelism on large
+            // batches; carry that decision through as an explicit override on
+            // the pre-built input. (When not prebuilt, run_simc_subprocess
+            // re-derives the same decision via build_full_simc_input.)
+            let batch_input = if prebuilt {
+                let want_parallel = user_parallel_override
+                    .unwrap_or(batches[batch_idx].len() >= 4 && stage.target_error > 0.2);
+                append_stage_overrides(&filtered, stage.target_error, want_parallel)
+            } else {
+                filtered
+            };
 
             // Per-batch progress mapping: each batch occupies an equal slice
             // of the stage's progress range. Within a batch we further sub-
@@ -1375,7 +1502,7 @@ pub async fn run_simc_staged(
                 job_id,
                 &batch_input,
                 options,
-                fight_style,
+                &p.fight_style,
                 stage.target_error,
                 stage_iters,
                 threads,
@@ -1565,6 +1692,22 @@ fn merge_eliminated_into_final(json: &mut Value, eliminated: &HashMap<String, Va
     }
 }
 
+/// Extract every `name` under `/sim/profilesets/results` from a simc result.
+pub(crate) fn profileset_result_names(json: &Value) -> Vec<String> {
+    json.pointer("/sim/profilesets/results")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|ps| {
+                    ps.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Run simc on a single Triage batch's profileset input.
 /// Uses the same gameplay-affecting options as staged simulation, while
 /// keeping Triage cheap through loose precision and forced profileset
@@ -1584,19 +1727,14 @@ pub async fn run_simc_triage_batch(
     log_buffer: std::sync::Arc<crate::log_buffer::LogBuffer>,
     on_profileset_progress: impl Fn(usize, usize),
 ) -> Result<Vec<Value>, String> {
+    // Only the execution-context fields (desired_targets/max_time/single_actor_batch)
+    // come from options here. fight_style, target_error, and iterations are
+    // stage-driven and arrive as explicit fn parameters — do NOT read them from `p`.
+    let p = SimParams::from_options(options);
     let threads = resolve_threads(options);
-    let desired_targets = options
-        .get("desired_targets")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as u32;
-    let max_time = options
-        .get("max_time")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(300) as u32;
-    let single_actor_batch = options
-        .get("single_actor_batch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    let desired_targets = p.desired_targets;
+    let max_time = p.max_time;
+    let single_actor_batch = p.single_actor_batch;
     let is_dungeon_route = fight_style == "DungeonRoute";
     let batch_input = format!("# Base Actor\n{}\n{}", base_profile, profileset_simc_lines);
     let triage_input = build_full_simc_input(&SimcInputBuild {
@@ -1666,6 +1804,44 @@ mod tests {
 
     fn keep_set(names: &[&str]) -> HashSet<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn sim_params_from_options_defaults_and_overrides() {
+        let p = SimParams::from_options(&serde_json::json!({}));
+        assert_eq!(p.fight_style, "Patchwerk");
+        assert!((p.target_error - 0.1).abs() < f64::EPSILON);
+        assert_eq!(p.iterations, 10_000);
+        assert_eq!(p.desired_targets, 1);
+        assert_eq!(p.max_time, 300);
+        assert!(p.single_actor_batch);
+
+        let p2 = SimParams::from_options(&serde_json::json!({
+            "fight_style": "DungeonRoute",
+            "target_error": 0.05,
+            "iterations": 50000,
+            "desired_targets": 3,
+            "max_time": 180,
+            "single_actor_batch": false
+        }));
+        assert_eq!(p2.fight_style, "DungeonRoute");
+        assert!((p2.target_error - 0.05).abs() < f64::EPSILON);
+        assert_eq!(p2.iterations, 50_000);
+        assert_eq!(p2.desired_targets, 3);
+        assert_eq!(p2.max_time, 180);
+        assert!(!p2.single_actor_batch);
+    }
+
+    #[test]
+    fn sim_params_clamps_iterations() {
+        let low = SimParams::from_options(&serde_json::json!({ "iterations": 1 }));
+        assert_eq!(low.iterations, 100);
+
+        let high = SimParams::from_options(&serde_json::json!({ "iterations": 5_000_000 }));
+        assert_eq!(high.iterations, 1_000_000);
+
+        let ok = SimParams::from_options(&serde_json::json!({ "iterations": 250_000 }));
+        assert_eq!(ok.iterations, 250_000);
     }
 
     #[tokio::test]
@@ -2042,15 +2218,18 @@ mod tests {
     // ---- iterations_for_stage ----
 
     fn stage(name: &'static str, target_error: f64) -> Stage {
-        Stage { name, target_error }
+        Stage {
+            name: Cow::Borrowed(name),
+            target_error,
+        }
     }
 
     #[test]
     fn iterations_for_stage_returns_user_iters_for_every_stage() {
         // No per-stage caps any more — simc's auto-tuner driven by `target_error`
         // decides actual iteration count. The user's budget is the safety ceiling.
-        assert_eq!(iterations_for_stage(&stage("Probe", 2.0), 10_000), 10_000);
-        assert_eq!(iterations_for_stage(&stage("Coarse", 1.0), 10_000), 10_000);
+        assert_eq!(iterations_for_stage(&stage("Broad", 1.0), 10_000), 10_000);
+        assert_eq!(iterations_for_stage(&stage("Refine", 0.5), 10_000), 10_000);
         assert_eq!(iterations_for_stage(&stage("Final", 0.05), 50_000), 50_000);
         assert_eq!(
             iterations_for_stage(&stage("Final", 0.01), 100_000),
@@ -2157,34 +2336,28 @@ mod tests {
     }
 
     #[test]
-    fn schedule_at_005_matches_legacy_six_stage_schedule() {
-        // Lock the existing production schedule so this refactor is a no-op
-        // for the default user precision.
-        assert_eq!(schedule_targets(0.05), vec![2.0, 1.0, 0.5, 0.2, 0.1, 0.05]);
+    fn schedule_at_005_matches_benchmark_selected_schedule() {
+        assert_eq!(schedule_targets(0.05), vec![1.0, 0.5, 0.05]);
     }
 
     #[test]
     fn schedule_drops_intermediate_stages_tighter_than_user_precision() {
         // user_te=0.2 should not run a 0.1/0.05 intermediate pass — those would
         // be more precise than the user asked for.
-        assert_eq!(schedule_targets(0.2), vec![2.0, 1.0, 0.5, 0.2]);
-        assert_eq!(schedule_targets(0.5), vec![2.0, 1.0, 0.5]);
-        assert_eq!(schedule_targets(1.0), vec![2.0, 1.0]);
+        assert_eq!(schedule_targets(0.2), vec![1.0, 0.5, 0.2]);
+        assert_eq!(schedule_targets(0.5), vec![1.0, 0.5]);
+        assert_eq!(schedule_targets(1.0), vec![1.0]);
     }
 
     #[test]
-    fn schedule_extends_with_extra_intermediates_for_tighter_user_precision() {
-        // user_te=0.01 grows the schedule past the legacy 0.05 floor.
-        assert_eq!(
-            schedule_targets(0.01),
-            vec![2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
-        );
+    fn schedule_keeps_same_intermediates_for_tighter_user_precision() {
+        assert_eq!(schedule_targets(0.01), vec![1.0, 0.5, 0.01]);
     }
 
     #[test]
     fn schedule_handles_user_target_error_between_candidate_stops() {
         // 0.3 doesn't match a candidate — keeps stages > 0.3 and appends Final(0.3).
-        assert_eq!(schedule_targets(0.3), vec![2.0, 1.0, 0.5, 0.3]);
+        assert_eq!(schedule_targets(0.3), vec![1.0, 0.5, 0.3]);
     }
 
     #[test]
@@ -2194,5 +2367,31 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].name, "Final");
         assert_eq!(stages[0].target_error, 3.0);
+    }
+
+    #[test]
+    fn schedule_override_is_only_used_when_option_is_present() {
+        let options = serde_json::json!({});
+        let stages = build_stage_schedule_from_options(&options, 0.05);
+        assert_eq!(
+            stages.iter().map(|s| s.target_error).collect::<Vec<_>>(),
+            vec![1.0, 0.5, 0.05]
+        );
+    }
+
+    #[test]
+    fn schedule_override_appends_user_final_precision() {
+        let options = serde_json::json!({
+            "stage_schedule": [
+                {"name": "Broad", "target_error": 1.0},
+                {"name": "Refine", "target_error": 0.5}
+            ]
+        });
+        let stages = build_stage_schedule_from_options(&options, 0.05);
+        assert_eq!(
+            stages.iter().map(|s| s.target_error).collect::<Vec<_>>(),
+            vec![1.0, 0.5, 0.05]
+        );
+        assert_eq!(stages.last().unwrap().name, "Final");
     }
 }

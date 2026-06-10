@@ -106,11 +106,47 @@ pub(super) async fn get_enchant_info(path: web::Path<u64>) -> HttpResponse {
     HttpResponse::Ok().json(result)
 }
 
+fn dedup_id_batch(ids: &[u64]) -> Result<Vec<u64>, HttpResponse> {
+    if ids.is_empty() || ids.len() > 200 {
+        return Err(HttpResponse::BadRequest().json(json!({"detail": "Provide 1-200 ids"})));
+    }
+    let mut seen = std::collections::HashSet::new();
+    Ok(ids.iter().copied().filter(|id| seen.insert(*id)).collect())
+}
+
+pub(super) async fn get_enchant_info_batch(
+    req: web::Json<super::types::IdsBatchRequest>,
+) -> HttpResponse {
+    let ids = match dedup_id_batch(&req.ids) {
+        Ok(ids) => ids,
+        Err(resp) => return resp,
+    };
+    let enchants: Vec<_> = ids
+        .iter()
+        .filter_map(|&id| game_data::get_enchant_info(id))
+        .collect();
+    HttpResponse::Ok().json(json!({"enchants": enchants}))
+}
+
 pub(super) async fn get_gem_info(path: web::Path<u64>) -> HttpResponse {
     let gem_id = path.into_inner();
     let result = game_data::get_gem_info(gem_id)
         .unwrap_or_else(|| json!({"gem_id": gem_id, "name": "", "icon": "", "quality": 3}));
     HttpResponse::Ok().json(result)
+}
+
+pub(super) async fn get_gem_info_batch(
+    req: web::Json<super::types::IdsBatchRequest>,
+) -> HttpResponse {
+    let ids = match dedup_id_batch(&req.ids) {
+        Ok(ids) => ids,
+        Err(resp) => return resp,
+    };
+    let gems: Vec<_> = ids
+        .iter()
+        .filter_map(|&id| game_data::get_gem_info(id))
+        .collect();
+    HttpResponse::Ok().json(json!({"gems": gems}))
 }
 
 pub(super) async fn list_enchants(query: web::Query<EnchantListQuery>) -> HttpResponse {

@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
@@ -9,7 +9,8 @@ use super::helpers::*;
 use super::request_json::NormalizedRequest;
 use super::types::*;
 use super::SimcBinaries;
-use crate::db::{ComboMetadataRepo, JobRepo};
+use crate::compute::{ProviderAvailability, ProviderRegistry, ProviderSettings, RunCtx, WorkloadEstimate};
+use crate::db::{ComboMetadataRepo, JobRepo, SettingsRepo};
 use crate::game_data;
 use crate::log_buffer::LogBuffer;
 use crate::models::{Job, JobStatus, SimcInputMode};
@@ -17,24 +18,28 @@ use crate::result_parser;
 use crate::simc_runner;
 
 pub(super) async fn create_sim(
+    http_req: HttpRequest,
     req: web::Json<SimRequest>,
     repo: web::Data<JobRepo>,
+    settings_repo: web::Data<SettingsRepo>,
     simc_bins: web::Data<Arc<SimcBinaries>>,
     log_buffer: web::Data<Arc<LogBuffer>>,
+    registry: web::Data<Arc<ProviderRegistry>>,
 ) -> HttpResponse {
     let simc_input = if req.raw {
         req.simc_input.clone()
     } else {
-        let mut input = if req.max_upgrade {
+        let upgraded = if req.max_upgrade {
             game_data::upgrade_simc_input(&req.simc_input)
         } else {
             req.simc_input.clone()
         };
-        input = apply_talent_override(&input, &req.options.talents);
-        input = apply_spec_override(&input, &req.options.spec_override);
-        input = crate::talent_normalize::normalize_simc_talents(&input);
-        input = inject_expert_fields(&input, &req.options);
-        input
+        let preprocessed = super::handler_prep::preprocess_simc_input(
+            &upgraded,
+            &req.options.talents,
+            &req.options.spec_override,
+        );
+        inject_expert_fields(&preprocessed, &req.options)
     };
 
     if let Some(resp) = validate_batch(&req.options.batch_id, repo.get_ref()).await {
@@ -61,19 +66,38 @@ pub(super) async fn create_sim(
         }),
     );
 
-    // Resolve the simc binary BEFORE inserting the job — otherwise an invalid
-    // branch produces an orphan Pending row that nothing will ever finish.
-    let simc = match simc_bins.resolve(&req.options.simc_branch) {
-        Ok(path) => path,
-        Err(e) => return HttpResponse::BadRequest().json(json!({ "detail": e })),
+    // Resolve compute provider.
+    let settings = match ProviderSettings::load(settings_repo.get_ref(), &registry.remote_ids()).await {
+        Ok(s) => s,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()})),
     };
+    let avail = ProviderAvailability::build(&settings, registry.get_ref(), http_req.headers());
+    let est = WorkloadEstimate { combo_count: 0, would_use_streaming_path: false }; // Quick Sim has no profilesets
+    let provider = match registry.for_request(
+        req.sim_type.as_str(),
+        req.options.compute_provider.as_deref(),
+        &avail,
+        &est,
+    ) {
+        Ok(p) => p,
+        Err(e) => return HttpResponse::BadRequest().json(json!({"detail": e.to_string()})),
+    };
+    // Reject an invalid simc_branch BEFORE inserting the Job — otherwise a bad
+    // local branch leaves an orphan Pending row that only fails asynchronously.
+    if let Some(resp) = validate_eager_branch(&provider, simc_bins.get_ref(), &req.options.simc_branch) {
+        return resp;
+    }
 
-    let mut job = Job::new(
-        display_input,
+    let auth = avail.auth_for(provider.id());
+    let provider_id_str = provider.id().to_string();
+
+    let mut job = Job::new_with_provider(
+        display_input.clone(),
         req.sim_type.clone(),
         req.options.iterations,
         req.options.fight_style.clone(),
         req.options.target_error,
+        provider_id_str.clone(),
     );
     job.batch_id = req.options.batch_id.clone();
     job.request_json = Some(envelope.to_json_string().unwrap_or_default());
@@ -84,21 +108,29 @@ pub(super) async fn create_sim(
     }
     // Quick Sim has no combo_metadata, so no table write needed.
 
+    // display_input IS the final, ready-to-execute simc input — the same text
+    // we stored on the Job and the same text we hand to the provider. Mark
+    // `prebuilt` so simc_runner skips its internal rebuild and SimmitProvider
+    // submits as-is.
+    let provider_input = display_input;
+
     let repo_clone = repo.get_ref().clone();
     let mut options = req.options.to_json_with_sim_type(&req.sim_type);
     if req.raw {
         options["raw"] = serde_json::json!(true);
     }
+    options["prebuilt"] = serde_json::json!(true);
 
     let job_id_clone = job_id.clone();
     let logs = log_buffer.get_ref().clone();
     let jid_logs = job_id.clone();
     let created_at_for_task = created_at.clone();
+    let provider_for_task = provider.clone();
 
     tokio::spawn(async move {
         // update_status honors the terminal-state invariant: if the job was
         // cancelled between create and spawn, this is a no-op. The token
-        // below gives run_simc a cooperative cancel signal at subprocess
+        // below gives the provider a cooperative cancel signal at subprocess
         // launch so we don't burn cycles on a sim the user already aborted.
         if let Err(e) = repo_clone
             .update_status(&job_id_clone, JobStatus::Running)
@@ -116,19 +148,41 @@ pub(super) async fn create_sim(
             crate::cancel::CancelToken::new(repo_clone.clone(), job_id_clone.clone());
         let logs_cb = logs.clone();
         let jid_cb = jid_logs.clone();
-        let result = simc_runner::run_simc(
-            &simc,
-            &job_id_clone,
-            &simc_input,
-            &options,
-            move |line| logs_cb.push_line(&jid_cb, line.to_string()),
-            Some(cancel_token),
-        )
-        .await;
+        // Cloud providers (Simmit) stream progress through this callback; local
+        // SimC for Quick Sim doesn't emit per-iteration progress, so the
+        // hardcoded "Simulating · 20%" above stays the floor.
+        let progress_repo = repo_clone.clone();
+        let progress_jid = job_id_clone.clone();
+        let ctx = RunCtx {
+            job_id: &job_id_clone,
+            on_progress: std::sync::Arc::new(move |pct, label: &str, sub: &str| {
+                let r = progress_repo.clone();
+                let j = progress_jid.clone();
+                let lbl = label.to_string();
+                let s = sub.to_string();
+                tokio::spawn(async move {
+                    let _ = r.update_progress(&j, pct, &lbl, &s).await;
+                });
+            }),
+            on_stage_complete: std::sync::Arc::new(|_summary: &str| {
+                // Quick Sim never emits stage_complete; only staged profileset
+                // workloads use this. Cloud providers (Simmit) also no-op since
+                // server-side multistage doesn't expose per-stage boundaries.
+            }),
+            on_log: std::sync::Arc::new(move |line: &str| {
+                logs_cb.push_line(&jid_cb, line.to_string())
+            }),
+            cancel: Some(cancel_token),
+            auth,
+        };
+        let result = provider_for_task
+            .run_quick(ctx, &provider_input, &options)
+            .await
+            .map_err(|e| e.to_string());
         super::helpers::finalize_job_outcome(
             &repo_clone,
             &job_id_clone,
-            &simc_input,
+            &provider_input,
             result,
             |json| {
                 let mut parsed = result_parser::parse_simc_result(json);

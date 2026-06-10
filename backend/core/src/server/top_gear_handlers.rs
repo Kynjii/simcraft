@@ -1,21 +1,20 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::handler_prep::{capped_max_combinations, preprocess_simc_input, serialize_combo_metadata_vec, socketed_item_ids};
 use super::helpers::*;
-use super::request_json::NormalizedRequest;
 use super::types::*;
 use super::SimcBinaries;
 use crate::addon_parser;
-use crate::db::JobRepo;
+use crate::compute::{ProviderRegistry, WorkloadEstimate};
+use crate::db::{JobRepo, SettingsRepo};
 use crate::game_data;
 use crate::gear_resolver;
 use crate::log_buffer::LogBuffer;
-use crate::models::{Job, SimcInputMode};
 use crate::profileset_generator;
 use crate::profileset_generator::triage::TRIAGE_THRESHOLD;
-use crate::simc_runner;
 
 fn normalized_talent_builds(talent_builds: &[TalentBuild]) -> Vec<(String, String)> {
     talent_builds
@@ -30,36 +29,6 @@ fn normalized_talent_builds(talent_builds: &[TalentBuild]) -> Vec<(String, Strin
                 .unwrap_or(&tb.talent_string)
                 .to_string();
             (tb.name.clone(), ts)
-        })
-        .collect()
-}
-
-fn capped_max_combinations(requested: Option<usize>) -> Option<usize> {
-    let server_max = crate::db::MAX_COMBINATIONS.load(std::sync::atomic::Ordering::Relaxed);
-    match (requested, server_max) {
-        (Some(client), max) if max > 0 => Some(client.min(max)),
-        (None, max) if max > 0 => Some(max),
-        (client, _) => client,
-    }
-}
-
-fn socketed_item_ids(resolved: &crate::types::ResolveGearResponse) -> HashSet<u64> {
-    resolved
-        .slots
-        .values()
-        .flat_map(|res| {
-            let mut ids = Vec::new();
-            if let Some(eq) = &res.equipped {
-                if eq.sockets > 0 {
-                    ids.push(eq.item_id);
-                }
-            }
-            for alt in &res.alternatives {
-                if alt.sockets > 0 {
-                    ids.push(alt.item_id);
-                }
-            }
-            ids
         })
         .collect()
 }
@@ -86,21 +55,21 @@ fn build_items_by_slot(
 }
 
 pub(super) async fn create_top_gear_sim(
+    http_req: HttpRequest,
     req: web::Json<TopGearRequest>,
     repo: web::Data<JobRepo>,
+    settings_repo: web::Data<SettingsRepo>,
     simc_bins: web::Data<Arc<SimcBinaries>>,
     log_buffer: web::Data<Arc<LogBuffer>>,
+    registry: web::Data<Arc<ProviderRegistry>>,
+    local_queue: web::Data<crate::compute::local::LocalSimQueue>,
 ) -> HttpResponse {
-    let mut simc_input = if req.max_upgrade {
+    let raw_input = if req.max_upgrade {
         game_data::upgrade_simc_input(&req.simc_input)
     } else {
         req.simc_input.clone()
     };
-    simc_input = apply_spec_override(
-        &apply_talent_override(&simc_input, &req.options.talents),
-        &req.options.spec_override,
-    );
-    simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
+    let simc_input = preprocess_simc_input(&raw_input, &req.options.talents, &req.options.spec_override);
 
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let currency_id_sim = crate::item_db::catalyst_currency_id();
@@ -131,6 +100,39 @@ pub(super) async fn create_top_gear_sim(
     };
 
     // ── Path decision ────────────────────────────────────────────────────────
+    // Count the exact combo count once: used for the zero-guard, the
+    // streaming-vs-eager routing decision, and (on the streaming path) the
+    // credit reservation + progress denominator. `Err` (TooMany) falls through
+    // to the eager path, which re-counts and surfaces the same error to the user.
+    let exact_combos: u64 = match profileset_generator::count_top_gear_combos_with_talents(
+        &base_profile,
+        &items_by_slot,
+        &req.selected_items,
+        max_combinations,
+        &talent_builds,
+        catalyst_charges,
+        &gem_opts,
+    ) {
+        Ok(0) => {
+            return HttpResponse::BadRequest().json(json!({
+                "detail": "No combinations to simulate. Select alternative items, enchants, \
+                           or gems that change the current gear set (with 'replace gems' off, \
+                           already-gemmed sockets produce no combinations)."
+            }));
+        }
+        Ok(n) => n as u64,
+        // TooMany: fall through to the eager path, which re-counts and returns the
+        // same error. We do NOT early-return here so the user-facing error message
+        // and behavior remain identical to the pre-refactor state.
+        Err(_) => 0,
+    };
+    // Route on the exact count. `exact_combos == 0` means Err(TooMany) above;
+    // routing it as non-streaming sends it to the eager path which handles it.
+    let use_streaming_path = exact_combos >= TRIAGE_THRESHOLD;
+
+    // O(axes) upper-bound estimate: kept only for the WorkloadEstimate passed to
+    // `resolve_provider_for_request` (provider selection heuristic) and the
+    // `estimate` field in the streaming response envelope. Not used for routing.
     let estimate = profileset_generator::estimate_top_gear_combo_count(
         &items_by_slot,
         &req.selected_items,
@@ -140,21 +142,36 @@ pub(super) async fn create_top_gear_sim(
         talent_builds.len().max(1),
     );
 
-    let effective_estimate = max_combinations
-        .map(|cap| estimate.min(cap as u64))
-        .unwrap_or(estimate);
-    let use_streaming_path = effective_estimate >= TRIAGE_THRESHOLD;
+    // For the WorkloadEstimate combo_count heuristic: use the exact count when
+    // available (non-zero), fall back to `estimate` for the TooMany case
+    // (exact_combos == 0 means Err was returned and the eager path handles it).
+    let workload_combo_count = if exact_combos > 0 { exact_combos as usize } else { estimate as usize };
+    let (provider, avail) = match resolve_provider_for_request(
+        "top_gear",
+        req.options.compute_provider.as_deref(),
+        WorkloadEstimate {
+            combo_count: workload_combo_count,
+            would_use_streaming_path: use_streaming_path,
+        },
+        http_req.headers(),
+        settings_repo.get_ref(),
+        registry.get_ref(),
+    ).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let provider_id_str = provider.id().to_string();
 
     if use_streaming_path {
-        let simc = match simc_bins.resolve(&req.options.simc_branch) {
-            Ok(path) => path,
-            Err(e) => return HttpResponse::BadRequest().json(json!({"detail": e})),
-        };
+        // Don't resolve a local SimC binary here — that happens inside
+        // `start_streaming_top_gear_job` only on the local branch, after the
+        // cloud-vs-local fork. A cloud-only deploy with no local SimC installed
+        // must still be able to run a streaming Top Gear via the cloud provider.
         return super::streaming_top_gear::start_streaming_top_gear_job(
             super::streaming_top_gear::StreamingTopGearStart {
                 req,
                 repo,
-                simc,
+                simc_bins: simc_bins.get_ref().clone(),
                 log_buffer,
                 base_profile,
                 items_by_slot,
@@ -163,6 +180,14 @@ pub(super) async fn create_top_gear_sim(
                 catalyst_charges,
                 max_combinations,
                 estimate,
+                exact_combos,
+                provider_id: provider_id_str.clone(),
+                provider: provider.clone(),
+                provider_auth: avail.auth_for(provider.id()),
+                local_queue: local_queue.get_ref().clone(),
+                local_provider: registry
+                    .get("local")
+                    .expect("local provider always registered"),
             },
         )
         .await;
@@ -199,88 +224,51 @@ pub(super) async fn create_top_gear_sim(
         return resp;
     }
 
-    let options_json = req.options.to_json();
-    let display_input = simc_runner::build_simc_input_from_options(&generated_input, &options_json);
-    let job = Job::new(
-        display_input,
-        crate::models::SimMode::TopGear.as_wire().to_string(),
-        req.options.iterations,
-        req.options.fight_style.clone(),
-        req.options.target_error,
-    );
-    let job_id = job.id.clone();
-    let created_at = job.created_at.clone();
+    let envelope_payload = json!({
+        "items_by_slot": items_by_slot,
+        "selected_items": req.selected_items,
+        "enchant_selections": req.enchant_selections,
+        "gem_options": req.gem_options,
+        "socketed_item_ids": socketed_ids.iter().collect::<Vec<_>>(),
+        "replace_gems": req.replace_gems,
+        "diamond_always_use": req.diamond_always_use,
+        "max_colors": req.max_colors,
+        "talent_builds": talent_builds,
+        "catalyst_charges": catalyst_charges,
+        "spec": req.options.spec_override,
+        "base_profile": base_profile,
+        "max_combinations": max_combinations,
+        "void_forge": req.void_forge,
+        "options": req.options.to_json(),
+    });
 
-    // Build normalized request envelope for resumability.
-    let envelope = NormalizedRequest::new(
-        "top_gear",
-        json!({
-            "items_by_slot": items_by_slot,
-            "selected_items": req.selected_items,
-            "enchant_selections": req.enchant_selections,
-            "gem_options": req.gem_options,
-            "socketed_item_ids": socketed_ids.iter().collect::<Vec<_>>(),
-            "replace_gems": req.replace_gems,
-            "diamond_always_use": req.diamond_always_use,
-            "max_colors": req.max_colors,
-            "talent_builds": talent_builds,
-            "catalyst_charges": catalyst_charges,
-            "spec": req.options.spec_override,
-            "base_profile": base_profile,
-            "max_combinations": max_combinations,
-            "void_forge": req.void_forge,
-            "options": req.options.to_json(),
-        }),
-    );
+    let combo_metadata_serialized = serialize_combo_metadata_vec(&combo_metadata);
 
-    // Resolve simc BEFORE insert — invalid branch must not create an orphan
-    // Pending row.
-    let simc = match simc_bins.resolve(&req.options.simc_branch) {
-        Ok(path) => path,
-        Err(e) => return HttpResponse::BadRequest().json(json!({"detail": e})),
-    };
-
-    let mut job = job;
-    job.request_json = Some(envelope.to_json_string().unwrap_or_default());
-    job.batch_id = req.options.batch_id.clone();
-    if let Err(e) = repo.insert(&job).await {
-        return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
-    }
-
-    // Best-effort write of per-combo metadata rows to the combo_metadata table.
-    write_combo_metadata_table(repo.get_ref(), &job_id, &combo_metadata).await;
-
-    spawn_staged_sim(
-        repo.get_ref().clone(),
-        simc,
-        req.options.to_json(),
-        job_id.clone(),
-        generated_input,
-        combo_count,
-        log_buffer.get_ref().clone(),
-        10, // inline/eager path: staged pipeline spans 10-95%
-        SimcInputMode::Inline,
-        crate::simc_runner::StagedResumeState::default(),
-        crate::profileset_generator::triage::TriageConstants::default(),
-    );
-
-    HttpResponse::Ok().json(SimResponse {
-        id: job_id,
-        status: "pending".to_string(),
-        created_at,
-    })
+    submit_profileset_sim(
+        ProfilesetSubmission {
+            sim_type: "top_gear",
+            sim_mode: crate::models::SimMode::TopGear,
+            generated_input,
+            combo_count,
+            combo_metadata_serialized,
+            envelope_payload,
+        },
+        &req.options,
+        provider,
+        avail,
+        repo.get_ref(),
+        simc_bins.get_ref(),
+        log_buffer.get_ref(),
+    )
+    .await
 }
 pub(super) async fn get_top_gear_combo_count(req: web::Json<TopGearRequest>) -> HttpResponse {
-    let mut simc_input = if req.max_upgrade {
+    let raw_input = if req.max_upgrade {
         game_data::upgrade_simc_input(&req.simc_input)
     } else {
         req.simc_input.clone()
     };
-    simc_input = apply_spec_override(
-        &apply_talent_override(&simc_input, &req.options.talents),
-        &req.options.spec_override,
-    );
-    simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
+    let simc_input = preprocess_simc_input(&raw_input, &req.options.talents, &req.options.spec_override);
 
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let currency_id = crate::item_db::catalyst_currency_id();

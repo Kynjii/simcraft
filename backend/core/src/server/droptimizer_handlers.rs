@@ -1,29 +1,27 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use serde_json::json;
 use std::sync::Arc;
 
+use super::handler_prep::{preprocess_simc_input, serialize_combo_metadata_value};
 use super::helpers::*;
-use super::request_json::NormalizedRequest;
 use super::types::*;
 use super::SimcBinaries;
 use crate::addon_parser;
-use crate::db::JobRepo;
+use crate::compute::{ProviderRegistry, WorkloadEstimate};
+use crate::db::{JobRepo, SettingsRepo};
 use crate::log_buffer::LogBuffer;
-use crate::models::Job;
 use crate::profileset_generator;
-use crate::simc_runner;
 
 pub(super) async fn create_droptimizer_sim(
+    http_req: HttpRequest,
     req: web::Json<DroptimizerRequest>,
     repo: web::Data<JobRepo>,
+    settings_repo: web::Data<SettingsRepo>,
     simc_bins: web::Data<Arc<SimcBinaries>>,
     log_buffer: web::Data<Arc<LogBuffer>>,
+    registry: web::Data<Arc<ProviderRegistry>>,
 ) -> HttpResponse {
-    let simc_input = apply_spec_override(
-        &apply_talent_override(&req.simc_input, &req.options.talents),
-        &req.options.spec_override,
-    );
-    let simc_input = crate::talent_normalize::normalize_simc_talents(&simc_input);
+    let simc_input = preprocess_simc_input(&req.simc_input, &req.options.talents, &req.options.spec_override);
     let parse_result = addon_parser::parse_simc_input(&simc_input);
     let base_profile = parse_result.base_profile.clone();
 
@@ -42,63 +40,41 @@ pub(super) async fn create_droptimizer_sim(
         return resp;
     }
 
-    let options_json_drop = req.options.to_json();
-    let display_input_drop =
-        simc_runner::build_simc_input_from_options(&generated_input, &options_json_drop);
-    let job = Job::new(
-        display_input_drop,
-        crate::models::SimMode::Droptimizer.as_wire().to_string(),
-        req.options.iterations,
-        req.options.fight_style.clone(),
-        req.options.target_error,
-    );
-    let job_id = job.id.clone();
-    let created_at = job.created_at.clone();
-
-    // Build normalized request envelope for resumability.
-    let envelope = NormalizedRequest::new(
+    let (provider, avail) = match resolve_provider_for_request(
         "droptimizer",
-        json!({
-            "base_profile": base_profile,
-            "drop_items": req.drop_items,
-            "options": req.options.to_json(),
-        }),
-    );
-
-    // Resolve simc BEFORE insert — invalid branch must not create an orphan
-    // Pending row.
-    let simc = match simc_bins.resolve(&req.options.simc_branch) {
-        Ok(path) => path,
-        Err(e) => return HttpResponse::BadRequest().json(json!({"detail": e})),
+        req.options.compute_provider.as_deref(),
+        WorkloadEstimate { combo_count, would_use_streaming_path: false },
+        http_req.headers(),
+        settings_repo.get_ref(),
+        registry.get_ref(),
+    ).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
     };
 
-    let mut job = job;
-    job.request_json = Some(envelope.to_json_string().unwrap_or_default());
-    job.batch_id = req.options.batch_id.clone();
-    if let Err(e) = repo.insert(&job).await {
-        return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
-    }
+    let envelope_payload = json!({
+        "base_profile": base_profile,
+        "drop_items": req.drop_items,
+        "options": req.options.to_json(),
+    });
 
-    // Best-effort write of per-combo metadata rows to the combo_metadata table.
-    write_combo_metadata_table_value(repo.get_ref(), &job_id, &combo_metadata).await;
+    let combo_metadata_serialized = serialize_combo_metadata_value(&combo_metadata);
 
-    spawn_staged_sim(
-        repo.get_ref().clone(),
-        simc,
-        req.options.to_json(),
-        job_id.clone(),
-        generated_input,
-        combo_count,
-        log_buffer.get_ref().clone(),
-        10, // inline/eager path: staged pipeline spans 10-95%
-        crate::models::SimcInputMode::Inline,
-        crate::simc_runner::StagedResumeState::default(),
-        crate::profileset_generator::triage::TriageConstants::default(),
-    );
-
-    HttpResponse::Ok().json(SimResponse {
-        id: job_id,
-        status: "pending".to_string(),
-        created_at,
-    })
+    submit_profileset_sim(
+        ProfilesetSubmission {
+            sim_type: "droptimizer",
+            sim_mode: crate::models::SimMode::Droptimizer,
+            generated_input,
+            combo_count,
+            combo_metadata_serialized,
+            envelope_payload,
+        },
+        &req.options,
+        provider,
+        avail,
+        repo.get_ref(),
+        simc_bins.get_ref(),
+        log_buffer.get_ref(),
+    )
+    .await
 }

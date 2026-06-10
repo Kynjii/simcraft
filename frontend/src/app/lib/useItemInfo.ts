@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react';
 import { API_URL } from './api';
+import { QUALITY_HEX } from './qualityColors';
 
 export interface ItemQuery {
   item_id: number;
@@ -28,81 +29,108 @@ function cacheKey(item_id: number, bonus_ids?: number[]): string {
   return `${item_id}:${[...bonus_ids].sort((a, b) => a - b).join(':')}`;
 }
 
-export const QUALITY_COLORS: Record<number, string> = {
-  0: '#9d9d9d', // Poor
-  1: '#ffffff', // Common
-  2: '#1eff00', // Uncommon
-  3: '#0070dd', // Rare
-  4: '#a335ee', // Epic
-  5: '#ff8000', // Legendary
-  6: '#e6cc80', // Artifact
-  7: '#00ccff', // Heirloom
-};
+/** @deprecated import `QUALITY_HEX` from `lib/qualityColors` instead. */
+export const QUALITY_COLORS = QUALITY_HEX;
 
-export function useItemInfo(queries: ItemQuery[]): Record<number, ItemInfo> {
-  const [items, setItems] = useState<Record<number, ItemInfo>>({});
-
-  // Stable dependency key
-  const depKey = queries
-    .filter((q) => q.item_id > 0)
-    .map((q) => cacheKey(q.item_id, q.bonus_ids))
-    .join(',');
-
+/**
+ * Shared effect skeleton for the three batch-info hooks.
+ *
+ * `depKey`      – stable string that drives the effect dependency array.
+ * `prepare`     – splits inputs into already-cached and missing entries;
+ *                 returns `{ cached, toFetch }`. Called inside the effect so
+ *                 module-cache reads are always fresh.
+ * `fetchMissing`– fires the POST and populates the module cache; receives the
+ *                 `toFetch` list from `prepare` and a `cancelled()` guard;
+ *                 resolves with the new entries to merge into state.
+ * `setState`    – the hook's own `setState` dispatcher (typed generically so
+ *                 each hook keeps its concrete Record type).
+ */
+function useBatchEffect<TItem, TFetch>(
+  depKey: string,
+  prepare: () => { cached: Record<number, TItem>; toFetch: TFetch[] },
+  fetchMissing: (toFetch: TFetch[], signalCancelled: () => boolean) => Promise<Record<number, TItem>>,
+  setState: Dispatch<SetStateAction<Record<number, TItem>>>
+) {
   useEffect(() => {
-    const unique = new Map<string, ItemQuery>();
-    for (const q of queries) {
-      if (q.item_id <= 0) continue;
-      const key = cacheKey(q.item_id, q.bonus_ids);
-      if (!unique.has(key)) unique.set(key, q);
-    }
-    if (unique.size === 0) return;
-
-    // Return cached immediately
-    const cached: Record<number, ItemInfo> = {};
-    const toFetch: ItemQuery[] = [];
-    for (const [key, q] of unique) {
-      if (cache[key]) {
-        cached[q.item_id] = cache[key];
-      } else {
-        toFetch.push(q);
-      }
-    }
+    const { cached, toFetch } = prepare();
 
     if (Object.keys(cached).length > 0) {
-      setItems((prev) => ({ ...prev, ...cached }));
+      setState((prev) => ({ ...prev, ...cached }));
     }
 
     if (toFetch.length === 0) return;
 
     let cancelled = false;
 
-    // Fetch each item individually so results appear as they arrive
-    for (const q of toFetch) {
-      (async () => {
-        try {
-          const params = new URLSearchParams();
-          if (q.bonus_ids && q.bonus_ids.length > 0) {
-            params.set('bonus_ids', q.bonus_ids.join(','));
-          }
-          const url = `${API_URL}/api/item-info/${q.item_id}?${params}`;
-          const res = await fetch(url);
-          if (!res.ok || cancelled) return;
-          const info: ItemInfo = await res.json();
-          if (cancelled) return;
-
-          const key = cacheKey(q.item_id, q.bonus_ids);
-          cache[key] = info;
-          setItems((prev) => ({ ...prev, [q.item_id]: info }));
-        } catch {
-          // Silently fail
-        }
-      })();
-    }
+    (async () => {
+      try {
+        const batch = await fetchMissing(toFetch, () => cancelled);
+        if (cancelled) return;
+        if (Object.keys(batch).length > 0) setState((prev) => ({ ...prev, ...batch }));
+      } catch {
+        // Silently fail
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
   }, [depKey]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export function useItemInfo(queries: ItemQuery[]): Record<number, ItemInfo> {
+  const [items, setItems] = useState<Record<number, ItemInfo>>({});
+
+  const depKey = queries
+    .filter((q) => q.item_id > 0)
+    .map((q) => cacheKey(q.item_id, q.bonus_ids))
+    .join(',');
+
+  useBatchEffect<ItemInfo, ItemQuery>(
+    depKey,
+    () => {
+      const unique = new Map<string, ItemQuery>();
+      for (const q of queries) {
+        if (q.item_id <= 0) continue;
+        const key = cacheKey(q.item_id, q.bonus_ids);
+        if (!unique.has(key)) unique.set(key, q);
+      }
+
+      const cached: Record<number, ItemInfo> = {};
+      const toFetch: ItemQuery[] = [];
+      for (const [key, q] of unique) {
+        if (cache[key]) {
+          cached[q.item_id] = cache[key];
+        } else {
+          toFetch.push(q);
+        }
+      }
+      return { cached, toFetch };
+    },
+    async (toFetch, signalCancelled) => {
+      const body = {
+        items: toFetch.map((q) => ({ item_id: q.item_id, bonus_ids: q.bonus_ids ?? [] })),
+      };
+      const res = await fetch(`${API_URL}/api/item-info/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok || signalCancelled()) return {};
+      const data: Record<string, ItemInfo> = await res.json();
+      if (signalCancelled()) return {};
+      const batch: Record<number, ItemInfo> = {};
+      for (const q of toFetch) {
+        const info = data[String(q.item_id)];
+        if (!info) continue;
+        const key = cacheKey(q.item_id, q.bonus_ids);
+        cache[key] = info;
+        batch[q.item_id] = info;
+      }
+      return batch;
+    },
+    setItems
+  );
 
   return items;
 }
@@ -123,47 +151,40 @@ export function useEnchantInfo(enchantIds: number[]): Record<number, EnchantInfo
     .sort()
     .join(',');
 
-  useEffect(() => {
-    const unique = new Set(enchantIds.filter((id) => id > 0));
-    if (unique.size === 0) return;
-
-    const cached: Record<number, EnchantInfo> = {};
-    const toFetch: number[] = [];
-    for (const id of unique) {
-      if (enchantCache[id]) {
-        cached[id] = enchantCache[id];
-      } else {
-        toFetch.push(id);
-      }
-    }
-
-    if (Object.keys(cached).length > 0) {
-      setEnchants((prev) => ({ ...prev, ...cached }));
-    }
-
-    if (toFetch.length === 0) return;
-
-    let cancelled = false;
-
-    for (const id of toFetch) {
-      (async () => {
-        try {
-          const res = await fetch(`${API_URL}/api/enchant-info/${id}`);
-          if (!res.ok || cancelled) return;
-          const info: EnchantInfo = await res.json();
-          if (cancelled || !info.name) return;
-          enchantCache[id] = info;
-          setEnchants((prev) => ({ ...prev, [id]: info }));
-        } catch {
-          // Silently fail
+  useBatchEffect<EnchantInfo, number>(
+    depKey,
+    () => {
+      const unique = new Set(enchantIds.filter((id) => id > 0));
+      const cached: Record<number, EnchantInfo> = {};
+      const toFetch: number[] = [];
+      for (const id of unique) {
+        if (enchantCache[id]) {
+          cached[id] = enchantCache[id];
+        } else {
+          toFetch.push(id);
         }
-      })();
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [depKey]); // eslint-disable-line react-hooks/exhaustive-deps
+      }
+      return { cached, toFetch };
+    },
+    async (toFetch, signalCancelled) => {
+      const res = await fetch(`${API_URL}/api/enchant-info/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: toFetch }),
+      });
+      if (!res.ok || signalCancelled()) return {};
+      const data: { enchants: EnchantInfo[] } = await res.json();
+      if (signalCancelled()) return {};
+      const batch: Record<number, EnchantInfo> = {};
+      for (const info of data.enchants) {
+        if (!info.name) continue;
+        enchantCache[info.enchant_id] = info;
+        batch[info.enchant_id] = info;
+      }
+      return batch;
+    },
+    setEnchants
+  );
 
   return enchants;
 }
@@ -185,47 +206,40 @@ export function useGemInfo(gemIds: number[]): Record<number, GemInfo> {
     .sort()
     .join(',');
 
-  useEffect(() => {
-    const unique = new Set(gemIds.filter((id) => id > 0));
-    if (unique.size === 0) return;
-
-    const cached: Record<number, GemInfo> = {};
-    const toFetch: number[] = [];
-    for (const id of unique) {
-      if (gemCache[id]) {
-        cached[id] = gemCache[id];
-      } else {
-        toFetch.push(id);
-      }
-    }
-
-    if (Object.keys(cached).length > 0) {
-      setGems((prev) => ({ ...prev, ...cached }));
-    }
-
-    if (toFetch.length === 0) return;
-
-    let cancelled = false;
-
-    for (const id of toFetch) {
-      (async () => {
-        try {
-          const res = await fetch(`${API_URL}/api/gem-info/${id}`);
-          if (!res.ok || cancelled) return;
-          const info: GemInfo = await res.json();
-          if (cancelled || !info.name) return;
-          gemCache[id] = info;
-          setGems((prev) => ({ ...prev, [id]: info }));
-        } catch {
-          // Silently fail
+  useBatchEffect<GemInfo, number>(
+    depKey,
+    () => {
+      const unique = new Set(gemIds.filter((id) => id > 0));
+      const cached: Record<number, GemInfo> = {};
+      const toFetch: number[] = [];
+      for (const id of unique) {
+        if (gemCache[id]) {
+          cached[id] = gemCache[id];
+        } else {
+          toFetch.push(id);
         }
-      })();
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [depKey]); // eslint-disable-line react-hooks/exhaustive-deps
+      }
+      return { cached, toFetch };
+    },
+    async (toFetch, signalCancelled) => {
+      const res = await fetch(`${API_URL}/api/gem-info/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: toFetch }),
+      });
+      if (!res.ok || signalCancelled()) return {};
+      const data: { gems: GemInfo[] } = await res.json();
+      if (signalCancelled()) return {};
+      const batch: Record<number, GemInfo> = {};
+      for (const info of data.gems) {
+        if (!info.name) continue;
+        gemCache[info.gem_id] = info;
+        batch[info.gem_id] = info;
+      }
+      return batch;
+    },
+    setGems
+  );
 
   return gems;
 }

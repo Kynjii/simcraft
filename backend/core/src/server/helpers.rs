@@ -1,10 +1,20 @@
+use actix_web::HttpResponse;
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
+// Hot-path regexes compiled once at startup.
+static RE_BLOCKED_DIRECTIVES: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?mi)^\s*(output|html|json2?|xml)\s*=").unwrap());
+static RE_TALENTS_LINE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?m)^talents=.+$").unwrap());
+static RE_SPEC_LINE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?m)^spec=.+$").unwrap());
+
 use super::types::SimOptions;
-use crate::db::{self, ComboMetadataInsert, ComboMetadataRepo, JobRepo};
+use super::SimcBinaries;
+use crate::db::{self, ComboMetadataInsert, ComboMetadataRepo, JobRepo, SettingsRepo};
 use crate::log_buffer::LogBuffer;
 use crate::models::{JobStatus, SimcInputMode};
 use crate::result_parser;
@@ -20,7 +30,7 @@ use crate::types::ResolveGearResponse;
 /// finalize semantics can't drift across handlers.
 ///
 /// `parse` lets callers pick the result-shape parser their sim mode emits
-/// (single-actor `parse_simc_result` vs gear-comparison `parse_top_gear_result`
+/// (single-actor `parse_simc_result` vs gear-comparison `parse_gear_comparison_result`
 /// + metadata). Both shapes go through the same terminal-state guard.
 pub(super) async fn finalize_job_outcome(
     repo: &JobRepo,
@@ -67,10 +77,9 @@ pub(super) async fn finalize_job_outcome(
 
 /// Sanitize user-provided custom SimC input by stripping dangerous directives.
 pub(super) fn sanitize_custom_simc(input: &str) -> String {
-    let blocked = regex::Regex::new(r"(?mi)^\s*(output|html|json2?|xml)\s*=").unwrap();
     input
         .lines()
-        .filter(|line| !blocked.is_match(line))
+        .filter(|line| !RE_BLOCKED_DIRECTIVES.is_match(line))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -274,9 +283,9 @@ pub(super) fn apply_talent_override(simc_input: &str, talents: &str) -> String {
     if talents.is_empty() {
         return simc_input.to_string();
     }
-    let re = regex::Regex::new(r"(?m)^talents=.+$").unwrap();
-    if re.is_match(simc_input) {
-        re.replace(simc_input, format!("talents={}", talents))
+    if RE_TALENTS_LINE.is_match(simc_input) {
+        RE_TALENTS_LINE
+            .replace(simc_input, format!("talents={}", talents))
             .to_string()
     } else {
         format!("{}\ntalents={}", simc_input, talents)
@@ -288,9 +297,10 @@ pub(super) fn apply_spec_override(simc_input: &str, spec: &str) -> String {
     if spec.is_empty() {
         return simc_input.to_string();
     }
-    let re = regex::Regex::new(r"(?m)^spec=.+$").unwrap();
-    if re.is_match(simc_input) {
-        re.replace(simc_input, format!("spec={}", spec)).to_string()
+    if RE_SPEC_LINE.is_match(simc_input) {
+        RE_SPEC_LINE
+            .replace(simc_input, format!("spec={}", spec))
+            .to_string()
     } else {
         format!("{}\nspec={}", simc_input, spec)
     }
@@ -323,6 +333,35 @@ pub(super) fn inject_realm(parsed: &mut Value, simc_input: &str) {
     }
 }
 
+/// Parse a completed local-stage-pipeline simc result, inject realm/elapsed
+/// metadata, persist it as the job result, and drop the job's log buffer. Shared
+/// by the live streaming Top Gear handler and the resume path so the two stay in
+/// lockstep.
+pub(crate) async fn finalize_local_stage_result(
+    repo: &JobRepo,
+    job_id: &str,
+    base_profile: &str,
+    output_json: &Value,
+    log_buffer: &crate::log_buffer::LogBuffer,
+) {
+    let raw_meta = load_combo_metadata(repo, job_id).await;
+    let meta = if raw_meta.is_empty() {
+        None
+    } else {
+        Some(raw_meta)
+    };
+    let mut parsed =
+        crate::result_parser::parse_gear_comparison_result(output_json, meta.as_ref(), "top_gear");
+    inject_realm(&mut parsed, base_profile);
+    if let Ok(Some(job_snap)) = repo.get(job_id).await {
+        inject_total_elapsed(&mut parsed, &job_snap.created_at);
+    }
+    let result_str = serde_json::to_string(&parsed).unwrap_or_else(|_| "{}".to_string());
+    let raw_str = serde_json::to_string(output_json).ok();
+    let _ = repo.set_result(job_id, &result_str, raw_str.as_deref()).await;
+    log_buffer.remove(job_id);
+}
+
 enum JobUpdate {
     Progress {
         pct: u8,
@@ -334,204 +373,376 @@ enum JobUpdate {
     },
 }
 
-fn enqueue_job_update(
-    tx: &tokio::sync::mpsc::UnboundedSender<JobUpdate>,
-    update: JobUpdate,
-    job_id: &str,
-) {
-    if tx.send(update).is_err() {
-        eprintln!(
-            "[{}] Failed to enqueue job update: writer task is closed",
-            job_id
-        );
-    }
-}
-
-/// Spawn a staged (top-gear / droptimizer) simulation in a background task.
-/// Progress and stage writes are serialized through an mpsc channel to prevent
-/// racing. An unbounded channel keeps these callbacks lossless because staged
-/// sim runs emit a finite burst of updates and we always await the writer drain
-/// before persisting terminal state.
+/// Provider-agnostic profileset spawner. Used by Top Gear, Drop Finder,
+/// Upgrade Compare, and Enchant/Gem handlers — they pass the resolved
+/// `Arc<dyn SimcProvider>` directly and never branch on `provider.id()`.
 ///
-/// `base_start` is the lower bound of the progress-bar range for the staged
-/// pipeline: 10 for inline/eager jobs (progress spans 10-95%), 50 for streamed
-/// jobs that ran Triage first (Triage consumed 5-50%, staged pipeline uses 50-95%).
+/// Decomposed into three pieces:
+///   - `make_run_ctx` builds the ordered-update channel + `RunCtx` callbacks
+///   - `run_profileset_job_task` owns the spawn + execute path
+///   - `finalize_gear_comparison_result` writes the parsed result + report files
 ///
-/// `simc_input_mode` controls whether checkpoint writes and pause polling are
-/// active. Inline-mode jobs skip those paths; only Streamed-mode jobs support pause/resume.
-///
-/// `constants` are the TriageConstants used for this job. Passed through to
-/// checkpoint writes so resume can reconstruct the exact same calibration.
-/// Eager (Inline) callers pass `TriageConstants::default()`; Streamed callers
-/// pass the constants from the Triage checkpoint.
+/// Streaming Top Gear's post-triage handoff and resume's staged path also use
+/// this spawner, routing through `LocalSimcProvider` (local-only by rule).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_staged_sim(
+pub(crate) fn spawn_profileset_sim(
     repo: JobRepo,
-    simc: PathBuf,
+    provider: Arc<dyn crate::compute::SimcProvider>,
+    auth: crate::compute::ProviderAuth,
     options: Value,
     job_id: String,
+    sim_type: String,
     simc_input: String,
     combo_count: usize,
     log_buffer: Arc<LogBuffer>,
-    base_start: u8,
-    simc_input_mode: SimcInputMode,
-    resume_state: crate::simc_runner::StagedResumeState,
-    constants: crate::profileset_generator::triage::TriageConstants,
+    staged_ctx: crate::compute::StagedExecutionContext,
 ) {
-    tokio::spawn(async move {
-        // update_status now honors the terminal-state invariant: if the job
-        // was cancelled between create and spawn, this is a no-op and the
-        // staged loop will hit its first cancellation gate and abort cleanly.
-        if let Err(e) = repo.update_status(&job_id, JobStatus::Running).await {
-            eprintln!("[{}] Failed to set Running status: {}", job_id, e);
-        }
-        let cancel_token = crate::cancel::CancelToken::new(repo.clone(), job_id.clone());
-
-        // Channel for ordered progress/stage writes
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<JobUpdate>();
-        let writer_repo = repo.clone();
-        let writer_jid = job_id.clone();
-        let writer_handle = tokio::spawn(async move {
-            while let Some(update) = rx.recv().await {
-                match update {
-                    JobUpdate::Progress { pct, stage, detail } => {
-                        if let Err(e) = writer_repo
-                            .update_progress(&writer_jid, pct, &stage, &detail)
-                            .await
-                        {
-                            eprintln!("[{}] Failed to update progress: {}", writer_jid, e);
-                        }
-                    }
-                    JobUpdate::StageComplete { summary } => {
-                        if let Err(e) = writer_repo.complete_stage(&writer_jid, &summary).await {
-                            eprintln!("[{}] Failed to complete stage: {}", writer_jid, e);
-                        }
-                    }
-                }
-            }
-        });
-
-        let tx_progress = tx.clone();
-        let tx_stages = tx.clone();
-        let progress_log_jid = job_id.clone();
-        let stages_log_jid = job_id.clone();
-        let logs = log_buffer.clone();
-        let jid_logs = job_id.clone();
-        let pool_opt = repo.pool().cloned();
-
-        let result = simc_runner::run_simc_staged(
-            &simc,
-            &job_id,
-            &simc_input,
-            &options,
-            combo_count,
-            base_start,
-            simc_input_mode,
-            pool_opt,
-            resume_state,
-            constants,
-            move |pct, stage, detail| {
-                enqueue_job_update(
-                    &tx_progress,
-                    JobUpdate::Progress {
-                        pct,
-                        stage: stage.to_string(),
-                        detail: detail.to_string(),
-                    },
-                    &progress_log_jid,
-                );
-            },
-            move |summary| {
-                enqueue_job_update(
-                    &tx_stages,
-                    JobUpdate::StageComplete {
-                        summary: summary.to_string(),
-                    },
-                    &stages_log_jid,
-                );
-            },
-            move |line| {
-                logs.push_line(&jid_logs, line.to_string());
-            },
-            Some(cancel_token),
-        )
-        .await;
-
-        // Close channel and wait for all queued writes to finish
-        drop(tx);
-        if let Err(e) = writer_handle.await {
-            eprintln!("[{}] Job update writer task failed: {}", job_id, e);
-        }
-
-        // Terminal writes — after all progress is flushed. The branch's
-        // staged runner returns StagedRunError::Paused for mid-pipeline
-        // pauses, which finalize_job_outcome (single-error) can't model,
-        // so the per-variant match stays inline here.
-        match result {
-            Ok(output) => {
-                let job_snap = repo.get(&job_id).await.ok().flatten();
-                let raw_meta = load_combo_metadata(&repo, &job_id).await;
-                let meta: Option<HashMap<String, Vec<Value>>> = if raw_meta.is_empty() {
-                    None
-                } else {
-                    Some(raw_meta)
-                };
-
-                let mut parsed = result_parser::parse_top_gear_result(&output.json, meta.as_ref());
-                inject_realm(&mut parsed, &simc_input);
-                if let Some(ref snap) = job_snap {
-                    inject_total_elapsed(&mut parsed, &snap.created_at);
-                }
-                let result_str = serde_json::to_string(&parsed).unwrap_or_default();
-                let raw_str = serde_json::to_string(&output.json).ok();
-                // set_result/set_report_files both honor the terminal-state
-                // invariant: writes are skipped when the job is already
-                // cancelled, so a late-arriving result can't resurrect it.
-                if let Err(e) = repo
-                    .set_result(&job_id, &result_str, raw_str.as_deref())
-                    .await
-                {
-                    eprintln!("[{}] Failed to set result: {}", job_id, e);
-                }
-                if let Err(e) = repo
-                    .set_report_files(
-                        &job_id,
-                        output.html_report.as_deref(),
-                        output.text_output.as_deref(),
-                    )
-                    .await
-                {
-                    eprintln!("[{}] Failed to set report files: {}", job_id, e);
-                }
-            }
-            Err(simc_runner::StagedRunError::Paused) => {
-                // Job was paused mid-pipeline. Status is already set to Paused
-                // inside run_simc_staged — nothing more to do here.
-            }
-            Err(simc_runner::StagedRunError::Other(e)) => {
-                let is_cancelled = repo
-                    .get(&job_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|j| j.status == JobStatus::Cancelled)
-                    .unwrap_or(false);
-                if !is_cancelled {
-                    if let Err(db_err) = repo.set_error(&job_id, &e).await {
-                        eprintln!("[{}] Failed to set error: {}", job_id, db_err);
-                    }
-                }
-            }
-        }
-        log_buffer.remove(&job_id);
-    });
+    tokio::spawn(run_profileset_job_task(
+        repo,
+        provider,
+        auth,
+        options,
+        job_id,
+        sim_type,
+        simc_input,
+        combo_count,
+        log_buffer,
+        staged_ctx,
+    ));
 }
 
+/// Set up an ordered progress/stage-complete writer task and return a `RunCtx`
+/// whose callbacks feed that writer. The returned `JoinHandle` must be awaited
+/// (after dropping `_tx`) before writing the final result, so queued updates
+/// drain without overwriting the terminal state.
+fn make_run_ctx<'a>(
+    job_id: &'a str,
+    repo: &JobRepo,
+    log_buffer: &Arc<LogBuffer>,
+    auth: crate::compute::ProviderAuth,
+) -> (
+    crate::compute::RunCtx<'a>,
+    tokio::sync::mpsc::UnboundedSender<JobUpdate>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<JobUpdate>();
+    let writer_repo = repo.clone();
+    let writer_jid = job_id.to_string();
+    let writer_handle = tokio::spawn(async move {
+        while let Some(update) = rx.recv().await {
+            match update {
+                JobUpdate::Progress { pct, stage, detail } => {
+                    if let Err(e) = writer_repo
+                        .update_progress(&writer_jid, pct, &stage, &detail)
+                        .await
+                    {
+                        eprintln!("[{}] Failed to update progress: {}", writer_jid, e);
+                    }
+                }
+                JobUpdate::StageComplete { summary } => {
+                    if let Err(e) = writer_repo.complete_stage(&writer_jid, &summary).await {
+                        eprintln!("[{}] Failed to complete stage: {}", writer_jid, e);
+                    }
+                }
+            }
+        }
+    });
+
+    let cancel_token = crate::cancel::CancelToken::new(repo.clone(), job_id.to_string());
+
+    let tx_progress = tx.clone();
+    let tx_stages = tx.clone();
+    let logs_cb = log_buffer.clone();
+    let jid_logs = job_id.to_string();
+
+    let ctx = crate::compute::RunCtx {
+        job_id,
+        on_progress: Arc::new(move |pct, lbl: &str, sub: &str| {
+            let _ = tx_progress.send(JobUpdate::Progress {
+                pct,
+                stage: lbl.to_string(),
+                detail: sub.to_string(),
+            });
+        }),
+        on_stage_complete: Arc::new(move |summary: &str| {
+            let _ = tx_stages.send(JobUpdate::StageComplete {
+                summary: summary.to_string(),
+            });
+        }),
+        on_log: Arc::new(move |line: &str| logs_cb.push_line(&jid_logs, line.to_string())),
+        cancel: Some(cancel_token),
+        auth,
+    };
+
+    (ctx, tx, writer_handle)
+}
+
+/// The actual spawned future. Sets Running status, builds the `RunCtx`,
+/// calls the provider, drains the writer, then finalizes by gear-comparison
+/// parser. Independently testable without touching `tokio::spawn`.
 #[allow(clippy::too_many_arguments)]
+async fn run_profileset_job_task(
+    repo: JobRepo,
+    provider: Arc<dyn crate::compute::SimcProvider>,
+    auth: crate::compute::ProviderAuth,
+    options: Value,
+    job_id: String,
+    sim_type: String,
+    simc_input: String,
+    combo_count: usize,
+    log_buffer: Arc<LogBuffer>,
+    staged_ctx: crate::compute::StagedExecutionContext,
+) {
+    if let Err(e) = repo.update_status(&job_id, JobStatus::Running).await {
+        eprintln!("[{}] Failed to set Running status: {}", job_id, e);
+    }
+
+    let (ctx, tx, writer_handle) = make_run_ctx(&job_id, &repo, &log_buffer, auth);
+
+    let result = provider
+        .run_with_profilesets(ctx, &simc_input, &options, combo_count, staged_ctx)
+        .await;
+
+    // Close the writer channel and drain queued updates before writing the
+    // final result — otherwise a late progress write could clobber it.
+    drop(tx);
+    let _ = writer_handle.await;
+
+    finalize_gear_comparison_result(&repo, &job_id, &simc_input, &sim_type, result).await;
+    log_buffer.remove(&job_id);
+}
+
+/// Translate the provider's `Result<SimcOutput, RunError>` into the right
+/// terminal state: parse via gear-comparison, persist; Paused / Cancelled
+/// are no-ops (status already set elsewhere); Other writes an error.
+/// `sim_type` is the actual wire string ("top_gear", "droptimizer", etc.) —
+/// it's stamped into the parsed result so mode identity isn't lost.
+async fn finalize_gear_comparison_result(
+    repo: &JobRepo,
+    job_id: &str,
+    simc_input: &str,
+    sim_type: &str,
+    result: Result<crate::simc_runner::SimcOutput, crate::compute::RunError>,
+) {
+    match result {
+        Ok(output) => {
+            let job_snap = repo.get(job_id).await.ok().flatten();
+            let raw_meta = load_combo_metadata(repo, job_id).await;
+            let meta: Option<HashMap<String, Vec<Value>>> =
+                if raw_meta.is_empty() { None } else { Some(raw_meta) };
+
+            let mut parsed = result_parser::parse_gear_comparison_result(&output.json, meta.as_ref(), sim_type);
+            inject_realm(&mut parsed, simc_input);
+            if let Some(ref snap) = job_snap {
+                inject_total_elapsed(&mut parsed, &snap.created_at);
+            }
+            let result_str = serde_json::to_string(&parsed).unwrap_or_default();
+            let raw_str = serde_json::to_string(&output.json).ok();
+            if let Err(e) = repo
+                .set_result(job_id, &result_str, raw_str.as_deref())
+                .await
+            {
+                eprintln!("[{}] Failed to set result: {}", job_id, e);
+            }
+            if let Err(e) = repo
+                .set_report_files(
+                    job_id,
+                    output.html_report.as_deref(),
+                    output.text_output.as_deref(),
+                )
+                .await
+            {
+                eprintln!("[{}] Failed to set report files: {}", job_id, e);
+            }
+        }
+        Err(crate::compute::RunError::Paused) => {
+            // Status was already set to Paused inside run_simc_staged.
+        }
+        Err(crate::compute::RunError::Cancelled) => {
+            // Cancel already handled by the CancelToken terminal-state invariant.
+        }
+        Err(crate::compute::RunError::Other(e)) => {
+            let is_cancelled = repo
+                .get(job_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|j| j.status == JobStatus::Cancelled)
+                .unwrap_or(false);
+            if !is_cancelled {
+                if let Err(db_err) = repo.set_error(job_id, &e).await {
+                    eprintln!("[{}] Failed to set error: {}", job_id, db_err);
+                }
+            }
+        }
+    }
+}
+
+/// Sim-type-agnostic payload describing a profileset workload that has been
+/// generated and is ready to submit. Built by each handler from its own
+/// gear/talent/enchant logic, then consumed by `submit_profileset_sim`.
+pub(crate) struct ProfilesetSubmission {
+    pub sim_type: &'static str,
+    pub sim_mode: crate::models::SimMode,
+    pub generated_input: String,
+    pub combo_count: usize,
+    /// Pre-serialized `(combo_name, json_string)` pairs for `combo_metadata`.
+    /// Each handler serializes its own per-combo metadata shape (top_gear/
+    /// enchant_gem use `Vec<Value>`; droptimizer uses `Value`) before passing
+    /// here so this helper stays sim-type-agnostic.
+    pub combo_metadata_serialized: Vec<(String, String)>,
+    /// JSON body for the `NormalizedRequest` envelope (sim-type-specific).
+    pub envelope_payload: Value,
+}
+
+/// Resolve the compute provider for an incoming sim request. Shared by all
+/// profileset-using handlers (and Top Gear's streaming-path pre-check).
+/// Returns the chosen provider + the availability snapshot used to derive auth.
+pub(crate) async fn resolve_provider_for_request(
+    sim_type: &str,
+    compute_provider: Option<&str>,
+    est: crate::compute::WorkloadEstimate,
+    req_headers: &actix_web::http::header::HeaderMap,
+    settings_repo: &SettingsRepo,
+    registry: &crate::compute::ProviderRegistry,
+) -> Result<
+    (
+        Arc<dyn crate::compute::SimcProvider>,
+        crate::compute::ProviderAvailability,
+    ),
+    HttpResponse,
+> {
+    let settings = crate::compute::ProviderSettings::load(settings_repo, &registry.remote_ids())
+        .await
+        .map_err(|e| {
+            HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}))
+        })?;
+    let avail = crate::compute::ProviderAvailability::build(&settings, registry, req_headers);
+    let provider = registry
+        .for_request(sim_type, compute_provider, &avail, &est)
+        .map_err(|e| HttpResponse::BadRequest().json(json!({"detail": e.to_string()})))?;
+    Ok((provider, avail))
+}
+
+/// Pure decision: should an eager submit be rejected up front for a bad branch?
+/// Only LOCAL submits need a resolvable binary; a cloud provider doesn't use a
+/// local binary, so a branch that won't resolve locally is the remote's concern.
+fn eager_branch_reject(is_local: bool, resolve_ok: bool) -> bool {
+    is_local && !resolve_ok
+}
+
+/// Up-front `simc_branch` validation for the EAGER (non-streaming) submit path.
+/// When the resolved provider is LOCAL, the requested branch must resolve to a
+/// local SimC binary BEFORE we insert a Job — otherwise an invalid branch leaves
+/// an orphan Pending row that nothing can ever finish (and only surfaces as an
+/// async Error). On a cloud provider this is skipped (no local binary involved).
+/// Returns `Some(BadRequest)` to reject, `None` to proceed.
+pub(crate) fn validate_eager_branch(
+    provider: &Arc<dyn crate::compute::SimcProvider>,
+    simc_bins: &SimcBinaries,
+    branch: &str,
+) -> Option<HttpResponse> {
+    let is_local = provider.id() == "local";
+    if !is_local {
+        // Cloud provider: branch validation is the remote's concern.
+        return None;
+    }
+    match simc_bins.resolve(branch) {
+        Ok(_) => None,
+        Err(e) if eager_branch_reject(is_local, false) => {
+            Some(HttpResponse::BadRequest().json(json!({ "detail": e })))
+        }
+        Err(_) => None,
+    }
+}
+
+/// Shared post-resolution finalize for profileset workloads. Owns the entire
+/// "build Job, insert, write metadata, spawn, return SimResponse" sequence
+/// that previously sat duplicated at the bottom of four handlers.
+///
+/// Streaming Top Gear bypasses this helper because its long-tail flow lives
+/// in `streaming_top_gear.rs` and is local-only by routing rule.
+pub(crate) async fn submit_profileset_sim(
+    submission: ProfilesetSubmission,
+    options: &crate::server::types::SimOptions,
+    provider: Arc<dyn crate::compute::SimcProvider>,
+    avail: crate::compute::ProviderAvailability,
+    repo: &JobRepo,
+    simc_bins: &SimcBinaries,
+    log_buffer: &Arc<LogBuffer>,
+) -> HttpResponse {
+    // Reject an invalid simc_branch BEFORE inserting the Job — otherwise a bad
+    // local branch leaves an orphan Pending row that only fails asynchronously.
+    if let Some(resp) = validate_eager_branch(&provider, simc_bins, &options.simc_branch) {
+        return resp;
+    }
+
+    let provider_id_str = provider.id().to_string();
+    let mut options_json = options.to_json();
+    // The handler-built `display_input` is the final ready-to-execute simc
+    // text. It's what we store on the Job and what we hand to the provider.
+    // `prebuilt: true` tells simc_runner to skip its internal rebuild;
+    // SimmitProvider submits the text as-is.
+    let display_input = crate::simc_runner::build_simc_input_from_options(
+        &submission.generated_input,
+        &options_json,
+    );
+    options_json["prebuilt"] = serde_json::json!(true);
+
+    let mut job = crate::models::Job::new_with_provider(
+        display_input.clone(),
+        submission.sim_mode.as_wire().to_string(),
+        options.iterations,
+        options.fight_style.clone(),
+        options.target_error,
+        provider_id_str,
+    );
+    let job_id = job.id.clone();
+    let created_at = job.created_at.clone();
+
+    let envelope =
+        crate::server::request_json::NormalizedRequest::new(submission.sim_type, submission.envelope_payload);
+    job.request_json = Some(envelope.to_json_string().unwrap_or_default());
+    job.batch_id = options.batch_id.clone();
+
+    if let Err(e) = repo.insert(&job).await {
+        return HttpResponse::InternalServerError().json(json!({"detail": e.to_string()}));
+    }
+
+    // Non-streamed (eager) jobs never sim-row, so no per-combo override lines are
+    // persisted here (`&[]` → profileset_simc stays empty).
+    write_combo_metadata_table_raw(repo, &job_id, &submission.combo_metadata_serialized, &[]).await;
+
+    let sim_type = submission.sim_type.to_string();
+    let auth = avail.auth_for(provider.id());
+    spawn_profileset_sim(
+        repo.clone(),
+        provider,
+        auth,
+        options_json,
+        job_id.clone(),
+        sim_type,
+        display_input,
+        submission.combo_count,
+        log_buffer.clone(),
+        crate::compute::StagedExecutionContext {
+            base_start: 10, // inline/eager: staged pipeline spans 10-95%
+            simc_input_mode: crate::models::SimcInputMode::Inline,
+            ..Default::default()
+        },
+    );
+
+    HttpResponse::Ok().json(crate::server::types::SimResponse {
+        id: job_id,
+        status: "pending".to_string(),
+        created_at,
+    })
+}
+
 pub(crate) async fn handoff_streamed_top_gear_to_staged(
     pool: &sqlx::AnyPool,
     repo: &JobRepo,
-    simc_bin: &std::path::Path,
+    provider: Arc<dyn crate::compute::SimcProvider>,
     job_id: &str,
     base_profile: &str,
     options: &Value,
@@ -582,18 +793,31 @@ pub(crate) async fn handoff_streamed_top_gear_to_staged(
         base_profile,
         survivor_simc_lines.join("\n")
     );
-    spawn_staged_sim(
+    // Pre-build through the same pipeline the eager handlers use so the
+    // streamed final stage sees identically-prepared input. `prebuilt: true`
+    // tells run_simc_staged to append per-stage target_error overrides
+    // instead of rebuilding the whole input each stage.
+    let prebuilt_input =
+        crate::simc_runner::build_simc_input_from_options(&combined_input, options);
+    let mut staged_options = options.clone();
+    staged_options["prebuilt"] = serde_json::json!(true);
+
+    spawn_profileset_sim(
         repo.clone(),
-        simc_bin.to_path_buf(),
-        options.clone(),
+        provider,
+        crate::compute::ProviderAuth::None, // local provider ignores auth
+        staged_options,
         job_id.to_string(),
-        combined_input,
+        "top_gear".to_string(),
+        prebuilt_input,
         survivor_simc_lines.len(),
         log_buffer.clone(),
-        50,
-        SimcInputMode::Streamed,
-        crate::simc_runner::StagedResumeState::default(),
-        constants,
+        crate::compute::StagedExecutionContext {
+            base_start: 50, // Triage consumed 5-50%; staged pipeline spans 50-95%
+            simc_input_mode: SimcInputMode::Streamed,
+            resume_state: crate::simc_runner::StagedResumeState::default(),
+            triage_constants: constants,
+        },
     );
 }
 
@@ -628,6 +852,24 @@ pub(super) async fn write_combo_metadata_table_raw(
     repo: &JobRepo,
     job_id: &str,
     metadata_strs: &[(String, String)],
+    profileset_simc_lines: &[String],
+) {
+    write_combo_metadata_table_raw_offset(repo, job_id, metadata_strs, profileset_simc_lines, 0).await;
+}
+
+/// As [`write_combo_metadata_table_raw`], but assigns `combo_id = base + i + 1`.
+/// The cloud-streaming path writes one slice per chunk and must keep combo_ids
+/// globally unique across chunks (the table PK is `(job_id, combo_id)`), so each
+/// chunk passes the running count of combos already written as `combo_id_base`.
+pub(super) async fn write_combo_metadata_table_raw_offset(
+    repo: &JobRepo,
+    job_id: &str,
+    metadata_strs: &[(String, String)],
+    // Per-combo simc override lines (parallel to `metadata_strs`), persisted so
+    // `sim_row` can reconstruct the row's gear. Pass `&[]` when unavailable (the
+    // row then stores `""` — fine for non-streamed jobs, which never sim-row).
+    profileset_simc_lines: &[String],
+    combo_id_base: i64,
 ) {
     if metadata_strs.is_empty() {
         return;
@@ -652,12 +894,12 @@ pub(super) async fn write_combo_metadata_table_raw(
         .iter()
         .enumerate()
         .map(|(i, (name, meta_json))| ComboMetadataInsert {
-            combo_id: (i as i64) + 1,
+            combo_id: combo_id_base + (i as i64) + 1,
             combo_name: name.as_str(),
             combo_key: "",
             batch_idx: None,
             cursor_json: "[]",
-            profileset_simc: "",
+            profileset_simc: profileset_simc_lines.get(i).map(String::as_str).unwrap_or(""),
             metadata_json: meta_json.as_str(),
         })
         .collect();
@@ -678,41 +920,10 @@ pub(super) async fn write_combo_metadata_table_raw(
 
 /// Convenience wrapper for handlers that have `HashMap<String, Vec<Value>>` combo_metadata
 /// (top_gear, enchant_gem, upgrade_compare).
-pub(super) async fn write_combo_metadata_table(
-    repo: &JobRepo,
-    job_id: &str,
-    combo_metadata: &HashMap<String, Vec<Value>>,
-) {
-    let metadata_strs: Vec<(String, String)> = combo_metadata
-        .iter()
-        .map(|(name, deltas)| {
-            (
-                name.clone(),
-                serde_json::to_string(deltas).unwrap_or_else(|_| "[]".to_string()),
-            )
-        })
-        .collect();
-    write_combo_metadata_table_raw(repo, job_id, &metadata_strs).await;
-}
-
-/// Convenience wrapper for handlers that have `HashMap<String, Value>` combo_metadata
-/// (droptimizer).
-pub(super) async fn write_combo_metadata_table_value(
-    repo: &JobRepo,
-    job_id: &str,
-    combo_metadata: &HashMap<String, Value>,
-) {
-    let metadata_strs: Vec<(String, String)> = combo_metadata
-        .iter()
-        .map(|(name, val)| {
-            (
-                name.clone(),
-                serde_json::to_string(val).unwrap_or_else(|_| "null".to_string()),
-            )
-        })
-        .collect();
-    write_combo_metadata_table_raw(repo, job_id, &metadata_strs).await;
-}
+// `write_combo_metadata_table` and `write_combo_metadata_table_value` were
+// removed: each handler now pre-serializes its combo_metadata into the
+// `ProfilesetSubmission::combo_metadata_serialized` field, and
+// `submit_profileset_sim` writes via `write_combo_metadata_table_raw`.
 
 /// Load combo_metadata for a job from the `combo_metadata` table.
 /// Returns an empty map for in-memory repos or when no rows exist.
@@ -733,5 +944,22 @@ pub(super) async fn load_combo_metadata(
             })
             .collect(),
         Err(_) => HashMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eager_branch_reject;
+
+    #[test]
+    fn eager_branch_reject_only_rejects_bad_local_branch() {
+        // Local provider + branch won't resolve → reject up front.
+        assert!(eager_branch_reject(true, false));
+        // Local provider + branch resolves → allow.
+        assert!(!eager_branch_reject(true, true));
+        // Cloud provider + branch won't resolve locally → allow (remote's concern).
+        assert!(!eager_branch_reject(false, false));
+        // Cloud provider + resolves → allow.
+        assert!(!eager_branch_reject(false, true));
     }
 }

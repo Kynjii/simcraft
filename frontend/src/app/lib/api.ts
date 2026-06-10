@@ -7,6 +7,34 @@ export const API_URL =
     ? window.location.origin
     : (process.env.NEXT_PUBLIC_API_URL ?? '');
 
+/** Build provider key headers from localStorage, scoped by the user's
+ *  Compute selection so we don't leak unrelated provider keys to the backend.
+ *
+ *  - `"local"`: no remote keys ever sent.
+ *  - `"auto"` / `undefined`: all configured remote keys (backend chooses).
+ *  - specific remote id (`"simmit"`, ...): just that one key.
+ *
+ *  Scans `simhammer.provider.<id>.api_key` so adding a new remote provider
+ *  needs zero changes here. */
+export function providerKeyHeaders(computeChoice?: string): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  if (computeChoice === 'local') return {};
+  const out: Record<string, string> = {};
+  for (let i = 0; i < window.localStorage.length; i++) {
+    const storageKey = window.localStorage.key(i);
+    if (!storageKey) continue;
+    const m = storageKey.match(/^simhammer\.provider\.(.+)\.api_key$/);
+    if (!m) continue;
+    const id = m[1];
+    if (id === 'local') continue;
+    // Specific remote selection: only that id's key.
+    if (computeChoice && computeChoice !== 'auto' && computeChoice !== id) continue;
+    const value = window.localStorage.getItem(storageKey);
+    if (value) out[`X-Provider-${id}-Key`] = value;
+  }
+  return out;
+}
+
 /** Fetch JSON with consistent error handling. Throws on non-ok responses. */
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -15,6 +43,27 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
     throw new Error(data.detail || `Server error ${res.status}`);
   }
   return res.json();
+}
+
+/** Prefix a path with the resolved API base. Centralizes the `${API_URL}${path}`
+ *  pattern so call sites stop hand-concatenating. */
+export function apiUrl(path: string): string {
+  return `${API_URL}${path}`;
+}
+
+/** POST a JSON body and parse a JSON response, with the shared `fetchJson`
+ *  error handling (throws `Error(detail || 'Server error N')` on non-ok). */
+export function postJson<T>(
+  path: string,
+  body: unknown,
+  init?: Omit<RequestInit, 'method' | 'body'>
+): Promise<T> {
+  return fetchJson<T>(apiUrl(path), {
+    ...init,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    body: JSON.stringify(body),
+  });
 }
 
 /** The shape returned by GET /api/sim/:id/input/preview */
@@ -40,9 +89,15 @@ export async function pauseSim(jobId: string): Promise<void> {
   await fetchJson<unknown>(`${API_URL}/api/sim/${jobId}/pause`, { method: 'POST' });
 }
 
-/** Resume a paused sim. Delegates to backend resume_job which dispatches by phase. */
+/** Resume a paused sim. Delegates to backend resume_job which dispatches by phase.
+ *  Attaches all configured provider keys (resume doesn't know the user's original
+ *  compute choice, so 'auto' sends every key — same behavior the submit path uses)
+ *  so a BYO-key web user can resume a cloud run. */
 export async function resumeSim(jobId: string): Promise<void> {
-  await fetchJson<unknown>(`${API_URL}/api/sim/${jobId}/resume`, { method: 'POST' });
+  await fetchJson<unknown>(`${API_URL}/api/sim/${jobId}/resume`, {
+    method: 'POST',
+    headers: providerKeyHeaders(),
+  });
 }
 
 /** Re-run a single Top Gear result row as a high-precision Quick Sim.
@@ -78,6 +133,7 @@ export interface JobOverviewSummary {
   region: string | null;
   dps: number | null;
   batch_id: string | null;
+  provider_id: string;
 }
 
 /** Active sims (pending/running/paused) + up to 20 most recent terminal jobs. */
